@@ -2,13 +2,14 @@
 -include_lib("common_test/include/ct.hrl").
 -compile(export_all).
 
-all() -> [{group, queue}, {group, stack}].
+all() -> [{group, queue}, {group, stack}, {group, keep_old}].
 groups() ->
     %% Nested groups for eternal glory. We use one group to declare all the
     %% tests ('all' group), and then nest it in 'stack' and 'queue' groups,
     %% which all repeat the 'all' test but with a different implementation.
     [{queue, [], [{group, all}]},
      {stack, [], [{group, all}]},
+     {keep_old, [], [{group, all}]},
      {all, [], [notify_to_active, notify_to_overflow, no_api_post,
                 filter_skip, filter_drop, active_to_notify,
                 passive_to_notify, passive_to_active, resize]}
@@ -46,6 +47,8 @@ init_per_group(queue, Config) ->
     [{type, queue} | Config];
 init_per_group(stack, Config) ->
     [{type, stack} | Config];
+init_per_group(keep_old, Config) ->
+    [{type, keep_old} | Config];
 init_per_group(_, Config) ->
     Config.
 
@@ -84,7 +87,9 @@ notify_to_active(Config) ->
         queue -> % queues are in order
             Sent = Msgs;
         stack -> % We don't care for the order
-            Sent = lists:sort(Msgs)
+            Sent = lists:sort(Msgs);
+        keep_old -> % in order, no benefit for out-of-order
+            Sent = Msgs
     end,
     %% messages are not repeated, and we get good state transitions
     Msg = Size+1,
@@ -108,7 +113,9 @@ notify_to_overflow(Config) ->
             Msgs = lists:seq(Size+1, Size*2); % we dropped 1..Size
         stack -> % We don't care for the order. We have all oldest + 1 newest
             Kept = lists:sort([Size*2 | lists:seq(1,Size-1)]),
-            Kept = lists:sort(Msgs)
+            Kept = lists:sort(Msgs);
+        keep_old -> % In order. We expect to have lost the last messages
+            Msgs = lists:seq(1,Size)
     end.
 
 no_api_post(Config) ->
@@ -145,7 +152,9 @@ filter_skip(Config) ->
         queue ->
             [1,2,3] = [Msg1, Msg2, Msg3];
         stack ->
-            [3,2,1] = [Msg1, Msg2, Msg3]
+            [3,2,1] = [Msg1, Msg2, Msg3];
+        keep_old ->
+            [1,2,3] = [Msg1, Msg2, Msg3]
     end.
 
 filter_drop(Config) ->
@@ -169,7 +178,9 @@ filter_drop(Config) ->
         queue ->
             [1,4] = MsgList ++ [MsgExtra];
         stack ->
-            [3,4] = MsgList ++ [MsgExtra]
+            [3,4] = MsgList ++ [MsgExtra];
+        keep_old ->
+            [1,4] = MsgList ++ [MsgExtra]
     end.
 
 active_to_notify(Config) ->
@@ -260,8 +271,15 @@ resize(Config) ->
     [pobox:post(Box, N) || N <- lists:seq(1,6)],
     pobox:resize(Box, 3),
     pobox:active(Box, Filter, no_state),
-    ?wait_msg({mail,Box,_,3,3}). % lost the surplus
-
+    Kept = ?wait_msg({mail,Box,Msgs,3,3}, Msgs), % lost the surplus
+    case ?config(type, Config) of
+        queue ->
+            Kept = [4,5,6];
+        stack ->
+            Kept = [3,2,1];
+        keep_old ->
+            Kept = [1,2,3]
+    end.
 
 %%%%%%%%%%%%%%%
 %%% HELPERS %%%

@@ -77,23 +77,29 @@ reverts to the passive state.
 
 The FSM can be illustrated as crappy ASCII as:
 
-        [passive]------(user makes active)----->[active]
-            | ^                                  |  ^  |
-            | '---(sends message to user)--<-----'  |  |
-     (user makes notify)                            |  |
-            |                                       |  |
-            |                                       |  |
-            V                                       |  |
-        [notify]---------(user makes active)--------'  |
-              ^----------(user makes notify)<----------'
+             ,---->[passive]------(user makes active)----->[active]
+             |         | ^                                  |  ^  |
+             |         | '---(sends message to user)--<-----'  |  |
+             |  (user makes notify)                            |  |
+             |         |                                       |  |
+    (user is notified) |                                       |  |
+             |         V                                       |  |
+             '-----[notify]---------(user makes active)--------'  |
+                         ^----------(user makes notify)<----------'
 
 ## Types of buffer
 
-Currently, there are two types of buffers supported: queues and stacks.
+Currently, there are three types of buffers supported: queues and stacks,
+and `keep_old` queues.
 
 Queues will keep messages in order, and drop oldest messages to make
 place for new ones. If you have a buffer of size 3 and receive messages
-a, b, c, d, e in that order, the buffer will contain messages `[c,d,e]`
+a, b, c, d, e in that order, the buffer will contain messages `[c,d,e]`.
+
+`keep_old` queues will keep messages in order, but block newer messages
+from entering, favoring keeping old messages instead. If you have a
+buffer of size 3 and receive messages a, b, c, d, e in that order, the
+buffer will contain messages `[a,b,c]`.
 
 Stacks will not guarantee any message ordering, and will drop the top of
 the stack to make place for the new messages first. for the same
@@ -102,14 +108,15 @@ messages, the stack buffer should contain the messages `[e,b,a]`.
 To choose between a queue and a stack buffer, you should consider the
 following criterias:
 
-- Do you need messages in order? Choose a queue.
+- Do you need messages in order? Choose one of the queues.
+- Do you need the latest messages coming in to be kept, or the oldest
+  ones? If so, pick `queue` and `keep_old`, respectively.
 - Do you need low latency? Then choose a stack. Stacks will give you
   many nessages with low latency with a few with high latency. Queues
-  will give you a higher overall latency, but less variance.
+  will give you a higher overall latency, but less variance over time.
 
 More buffer types could be supported in the future, if people require
-them. It could be useful to have queues that keep old messages and
-refuse new ones, for example.
+them.
 
 ## How to build it
 
@@ -265,10 +272,11 @@ And keep going on and on and on.
   coordinating the multiple state machines together may get tricky.
 - The library is a generalization of ideas designed and implemented in
   logplex by Geoff Cant's (@archaelus). Props to him.
-- Implementing a queue buffer that blocks all new messages (drops them
-  silently) with a filter function that selects one message at a time
-  would be equivalent to a naive bounded mailbox similar to what plenty
-  of users asked for before.
+- Using a `keep_old` buffer with a filter function that selects one message
+  at a time would be equivalent to a naive bounded mailbox similar to what
+  plenty of users asked for before. Tricking the filter function to
+  forward the message (`self() ! Msg`) while dropping it will allow
+  to do selective receives on bounded mailboxes.
 
 ## Contributing
 
@@ -296,12 +304,12 @@ These rules are strict, but we're nice people!
 This is more a wishlist than a roadmap, in no particular order:
 
 - Implement `give_away` and `heir` functionality to PO Boxes
-- A queue buffer that once full will deny new messages from entering.
 - Provide default filter functions in a new module
-- Production experience!
 
 ## Changelog
 
+- 0.1.1: adding `keep_old` queue, which blocks new messages from entering
+         a filled queue.
 - 0.1.0: initial commit
 
 ## Authors / Thanks

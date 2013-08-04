@@ -11,8 +11,7 @@
 -behaviour(gen_fsm).
 -compile({no_auto_import,[size/1]}).
 
-%% possible addition: queue/stack that drops new, instead of drop old!
--record(buf, {type = undefined :: 'stack' | 'queue',
+-record(buf, {type = undefined :: 'stack' | 'queue' | 'keep_old',
               max = undefined :: max(),
               size = 0 :: non_neg_integer(),
               drop = 0 :: drop(),
@@ -72,7 +71,8 @@ start_link(Name, Owner, Size, Type) ->
                  'notify'|'passive') -> {ok, pid()}.
 start_link(Name, Owner, Size, Type, StateName) when Size > 0,
                                                     Type =:= queue orelse
-                                                    Type =:= stack,
+                                                    Type =:= stack orelse
+                                                    Type =:= keep_old,
                                                     StateName =:= notify orelse
                                                     StateName =:= passive ->
     gen_fsm:start_link(Name, ?MODULE, {Owner, Size, Type, StateName}, []).
@@ -203,12 +203,13 @@ send_notification(S = #state{owner=Owner}) ->
     {next_state, passive, S}.
 
 %%% Generic buffer ops
--spec buf_new('queue' | 'stack', max()) -> buffer().
+-spec buf_new('queue' | 'stack' | 'keep_old', max()) -> buffer().
 buf_new(queue, Size) -> #buf{type=queue, max=Size, data=queue:new()};
-buf_new(stack, Size) -> #buf{type=stack, max=Size, data=[]}.
+buf_new(stack, Size) -> #buf{type=stack, max=Size, data=[]};
+buf_new(keep_old, Size) -> #buf{type=keep_old, max=Size, data=queue:new()}.
 
 insert(Msg, B=#buf{type=T, max=Size, size=Size, drop=Drop, data=Data}) ->
-    B#buf{drop=Drop+1, data=push(T, Msg, drop(T, Data))};
+    B#buf{drop=Drop+1, data=push_drop(T, Msg, Data)};
 insert(Msg, B=#buf{type=T, size=Size, data=Data}) ->
     B#buf{size=Size+1, data=push(T, Msg, Data)}.
 
@@ -248,11 +249,15 @@ filter(T, Data, Fun, State, Msgs, Count, Drop) ->
     end.
 
 %% Specific buffer ops
+push_drop(keep_old, _Msg, Data) -> Data;
+push_drop(T, Msg, Data) -> push(T, Msg, drop(T, Data)).
+
 drop(T, Data) -> drop(T, 1, Data).
 
 drop(_, 0, Data) -> Data;
 drop(queue, 1, Queue) -> queue:drop(Queue);
 drop(stack, 1, [_|T]) -> T;
+drop(keep_old, 1, Queue) -> queue:drop_r(Queue);
 drop(queue, N, Queue) ->
     Len = queue:len(Queue),
     if Len > N  -> element(2, queue:split(N, Queue));
@@ -262,11 +267,18 @@ drop(stack, N, L) ->
     Len = length(L),
     if Len > N  -> lists:nthtail(N, L);
        Len =< N -> []
+    end;
+drop(keep_old, N, Queue) ->
+    Len = queue:len(Queue),
+    if Len > N  -> element(1, queue:split(N, Queue));
+       Len =< N -> queue:new()
     end.
 
 push(queue, Msg, Q) -> queue:in(Msg, Q);
-push(stack, Msg, L) -> [Msg|L].
+push(stack, Msg, L) -> [Msg|L];
+push(keep_old, Msg, Q) -> queue:in(Msg, Q).
 
 pop(queue, Q) -> queue:out(Q);
 pop(stack, []) -> {empty, []};
-pop(stack, [H|T]) -> {{value,H}, T}.
+pop(stack, [H|T]) -> {{value,H}, T};
+pop(keep_old, Q) -> queue:out(Q).
