@@ -37,7 +37,7 @@ through. The PO Box process will implement a buffer (see *Types of
 Buffer* for details) that will do nothing but churn through messages and
 drop them when the buffer is full for you.
 
-Depending on how you use the API, the PO Box can tell you it received no
+Depending on how you use the API, the PO Box can tell you it received new
 data so you ask for it, or send it to you directly:
 
                                                       messages
@@ -61,7 +61,7 @@ To be more detailed, a PO Box is a state machine with an owner process
 The passive state basically does nothing but accumulate messages in the
 buffer and drop them when necessary.
 
-The notify state is enabled by the user, calling the PO Box. Its sole
+The notify state is enabled by the user by calling the PO Box. Its sole
 task is to verify if there is any message in the buffer. If there is, it
 will respond to the PO Box's owner with a `{mail, new_data}` message
 sent directly to the pid. If there is no message in the buffer, the
@@ -305,6 +305,10 @@ This is more a wishlist than a roadmap, in no particular order:
 
 - Implement `give_away` and `heir` functionality to PO Boxes
 - Provide default filter functions in a new module
+- Add the PO Box's pid in the `newdata` messages so a process can
+  own more than one PO Box. (breaks current API)
+- Keep internal queue and stack sizes as manual O(1) counters rather than
+  dynamically recalculating sizes O(n). (backwards incompatible internal state)
 
 ## Changelog
 
