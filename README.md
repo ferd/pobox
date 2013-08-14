@@ -305,13 +305,12 @@ This is more a wishlist than a roadmap, in no particular order:
 
 - Implement `give_away` and `heir` functionality to PO Boxes
 - Provide default filter functions in a new module
-- Add the PO Box's pid in the `newdata` messages so a process can
-  own more than one PO Box. (breaks current API)
-- Keep internal queue and stack sizes as manual O(1) counters rather than
-  dynamically recalculating sizes O(n). (backwards incompatible internal state)
 
 ## Changelog
 
+- 0.2.0: Added PO Box's pid in the `newdata` message so a process can own more
+         than a PO Box. Changed internal queue and stack size monitoring to be
+         O(1) in all cases.
 - 0.1.1: adding `keep_old` queue, which blocks new messages from entering
          a filled queue.
 - 0.1.0: initial commit

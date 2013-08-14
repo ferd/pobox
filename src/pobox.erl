@@ -209,7 +209,7 @@ buf_new(stack, Size) -> #buf{type=stack, max=Size, data=[]};
 buf_new(keep_old, Size) -> #buf{type=keep_old, max=Size, data=queue:new()}.
 
 insert(Msg, B=#buf{type=T, max=Size, size=Size, drop=Drop, data=Data}) ->
-    B#buf{drop=Drop+1, data=push_drop(T, Msg, Data)};
+    B#buf{drop=Drop+1, data=push_drop(T, Msg, Size, Data)};
 insert(Msg, B=#buf{type=T, size=Size, data=Data}) ->
     B#buf{size=Size+1, data=push(T, Msg, Data)}.
 
@@ -221,7 +221,7 @@ resize_buf(NewMax, B=#buf{type=T, size=Size, drop=Drop, data=Data}) ->
     if Size > NewMax ->
         ToDrop = Size - NewMax,
         B#buf{size=NewMax, max=NewMax, drop=Drop+ToDrop,
-              data=drop(T, ToDrop, Data)};
+              data=drop(T, ToDrop, Size, Data)};
        Size =< NewMax ->
         B#buf{max=NewMax}
     end.
@@ -249,29 +249,26 @@ filter(T, Data, Fun, State, Msgs, Count, Drop) ->
     end.
 
 %% Specific buffer ops
-push_drop(keep_old, _Msg, Data) -> Data;
-push_drop(T, Msg, Data) -> push(T, Msg, drop(T, Data)).
+push_drop(keep_old, _Msg, _Size, Data) -> Data;
+push_drop(T, Msg, Size, Data) -> push(T, Msg, drop(T, Size, Data)).
 
-drop(T, Data) -> drop(T, 1, Data).
+drop(T, Size, Data) -> drop(T, 1, Size, Data).
 
-drop(_, 0, Data) -> Data;
-drop(queue, 1, Queue) -> queue:drop(Queue);
-drop(stack, 1, [_|T]) -> T;
-drop(keep_old, 1, Queue) -> queue:drop_r(Queue);
-drop(queue, N, Queue) ->
-    Len = queue:len(Queue),
-    if Len > N  -> element(2, queue:split(N, Queue));
-       Len =< N -> queue:new()
+drop(_, 0, _Size, Data) -> Data;
+drop(queue, 1, _Size, Queue) -> queue:drop(Queue);
+drop(stack, 1, _Size, [_|T]) -> T;
+drop(keep_old, 1, _Size, Queue) -> queue:drop_r(Queue);
+drop(queue, N, Size, Queue) ->
+    if Size > N  -> element(2, queue:split(N, Queue));
+       Size =< N -> queue:new()
     end;
-drop(stack, N, L) ->
-    Len = length(L),
-    if Len > N  -> lists:nthtail(N, L);
-       Len =< N -> []
+drop(stack, N, Size, L) ->
+    if Size > N  -> lists:nthtail(N, L);
+       Size =< N -> []
     end;
-drop(keep_old, N, Queue) ->
-    Len = queue:len(Queue),
-    if Len > N  -> element(1, queue:split(N, Queue));
-       Len =< N -> queue:new()
+drop(keep_old, N, Size, Queue) ->
+    if Size > N  -> element(1, queue:split(N, Queue));
+       Size =< N -> queue:new()
     end.
 
 push(queue, Msg, Q) -> queue:in(Msg, Q);
