@@ -79,7 +79,7 @@ notify_to_active(Config) ->
     Size = ?config(size, Config),
     Sent = lists:seq(1,Size),
     [pobox:post(Box, N) || N <- Sent],
-    ?wait_msg({mail, new_data}),
+    ?wait_msg({mail, Box, new_data}),
     pobox:active(Box, fun(X,State) -> {{ok,X}, State} end, no_state),
     Msgs = ?wait_msg({mail,Box,Msgs,Size,0}, Msgs),
     %% Based on the type, we have different guarantees
@@ -104,7 +104,7 @@ notify_to_overflow(Config) ->
     Box = ?config(pobox, Config),
     Size = ?config(size, Config),
     [pobox:post(Box, N) || N <- lists:seq(1,Size*2)],
-    ?wait_msg({mail, new_data}),
+    ?wait_msg({mail, Box, new_data}),
     pobox:active(Box, fun(X,State) -> {{ok,X}, State} end, no_state),
     Msgs = ?wait_msg({mail,Box,Msgs,Size,Size}, Msgs),
     %% Based on the type, we have different guarantees
@@ -126,7 +126,7 @@ no_api_post(Config) ->
     Size = ?config(size, Config),
     Sent = lists:seq(1,Size),
     [Box ! {post,N} || N <- Sent],
-    ?wait_msg({mail, new_data}),
+    ?wait_msg({mail, Box, new_data}),
     pobox:active(Box, fun(X,State) -> {{ok,X}, State} end, no_state),
     Sent = lists:sort(?wait_msg({mail,Box,Msgs,Size,0}, Msgs)).
 
@@ -138,7 +138,7 @@ filter_skip(Config) ->
     Size = ?config(size, Config),
     true = Size >= 3, % The test will fail with less than 3 messages
     [pobox:post(Box, N) || N <- lists:seq(1,3)],
-    ?wait_msg({mail, new_data}),
+    ?wait_msg({mail, Box, new_data}),
     Filter = fun(X,0) -> {{ok,X}, 1};
                 (_,_) -> skip
              end,
@@ -165,7 +165,7 @@ filter_drop(Config) ->
     Size = ?config(size, Config),
     true = Size >= 3, % The test will fail with less than 3 messages
     [pobox:post(Box,N) || N <- lists:seq(1,3)],
-    ?wait_msg({mail, new_data}),
+    ?wait_msg({mail, Box, new_data}),
     Filter = fun(X,0) -> {{ok,X}, 1};
                 (_,_) -> {drop, 1}
              end,
@@ -198,7 +198,7 @@ active_to_notify(Config) ->
     pobox:notify(Box),
     wait_until(fun() -> notify =:= get_statename(Box) end, 100, 10),
     pobox:post(Box, 2),
-    ?wait_msg({mail, new_data}),
+    ?wait_msg({mail, Box, new_data}),
     pobox:active(Box, fun(X,State) -> {{ok,X}, State} end, no_state),
     ?wait_msg({mail,Box,[2],1,0}).
 
@@ -216,7 +216,7 @@ passive_to_notify(Config) ->
     wait_until(fun() -> notify =:= get_statename(Box) end, 100, 10),
     %% Then we should be receiving notifications after a message
     pobox:post(Box, 2),
-    ?wait_msg({mail, new_data}),
+    ?wait_msg({mail, Box, new_data}),
     pobox:active(Box, fun(X,State) -> {{ok,X}, State} end, no_state),
     ?wait_msg({mail,Box,[2],1,0}),
     %% Back to passive. With a message in the mailbox, we should be able
@@ -225,7 +225,7 @@ passive_to_notify(Config) ->
     pobox:post(Box, 3),
     {_, 0} = process_info(self(), message_queue_len), % no 'new_data'
     pobox:notify(Box),
-    ?wait_msg({mail, new_data}),
+    ?wait_msg({mail, Box, new_data}),
     passive = get_statename(Box).
 
 passive_to_active(Config) ->
@@ -260,7 +260,7 @@ resize(Config) ->
     Filter = fun(X,State) -> {{ok,X},State} end,
     pobox:resize(Box, 3),
     [pobox:post(Box, N) || N <- lists:seq(1,4)],
-    ?wait_msg({mail, new_data}), % POBox is full
+    ?wait_msg({mail, Box, new_data}), % POBox is full
     pobox:active(Box, Filter, no_state),
     ?wait_msg({mail,Box,_,3,1}), % then box is empty
     [pobox:post(Box, N) || N <- lists:seq(1,3)],

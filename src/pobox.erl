@@ -24,7 +24,7 @@
                         {{ok,NewMsg::term()} | drop , State::term()} | skip).
 
 -type in() :: {'post', Msg::term()}.
--type note() :: {'mail', new_data}.
+-type note() :: {'mail', Self::pid(), new_data}.
 -type mail() :: {'mail', Self::pid(), Msgs::list(),
                          Count::non_neg_integer(), Lost::drop()}.
 
@@ -199,7 +199,7 @@ send(S=#state{buf = Buf, owner=Pid, filter=Fun, filter_state=FilterState}) ->
     {next_state, passive, NewState}.
 
 send_notification(S = #state{owner=Owner}) ->
-    Owner ! {mail, new_data},
+    Owner ! {mail, self(), new_data},
     {next_state, passive, S}.
 
 %%% Generic buffer ops
