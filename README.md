@@ -1,8 +1,8 @@
 # PO Box
 
 High throughput Erlang applications often get bitten by the fact that
-Erlang mailboxes are unbouded and will keep accepting messages until the
-node goes out of memory.
+Erlang mailboxes are unbounded and will keep accepting messages until the
+node runs out of memory.
 
 In most cases, this problem can be solved by imposing a rate limit on
 the producers, and it is recommended to explore this idea before looking
@@ -13,7 +13,7 @@ that your optimization efforts remain fruitless, you need to start
 shedding load by dropping messages.
 
 PO Box can help by shedding the load for you, and making sure you won't
-go out of memory.
+run out of memory.
 
 ## The Principles
 
@@ -37,8 +37,9 @@ through. The PO Box process will implement a buffer (see *Types of
 Buffer* for details) that will do nothing but churn through messages and
 drop them when the buffer is full for you.
 
-Depending on how you use the API, the PO Box can tell you it received new
-data so you ask for it, or send it to you directly:
+Depending on how you use the API, the PO Box can tell you it received new data,
+so you can then ask for the data, or you can tell it to  send the data to you
+directly, without notification:
 
                                                       messages
                                                          |
@@ -112,7 +113,7 @@ following criterias:
 - Do you need the latest messages coming in to be kept, or the oldest
   ones? If so, pick `queue` and `keep_old`, respectively.
 - Do you need low latency? Then choose a stack. Stacks will give you
-  many nessages with low latency with a few with high latency. Queues
+  many messages with low latency with a few with high latency. Queues
   will give you a higher overall latency, but less variance over time.
 
 More buffer types could be supported in the future, if people require
@@ -149,7 +150,7 @@ Where:
 - `BufferType` can be either `queue` or `stack` and specifies which type
   is going to be used.
 - `InitialState` can be either `passive` or `notify`. The default value
-  is set to `notify`. Having the buffer passive is desireable when you
+  is set to `notify`. Having the buffer passive is desirable when you
   start it during an asynchronous `init` and do not want to receive
   notifications right away.
 
@@ -265,7 +266,7 @@ And keep going on and on and on.
 ## Notes
 
 - Be careful to have a lightweight filter function if you expect constant
-  overload from messages thta keep coming very very fast. While the
+  overload from messages that keep coming very very fast. While the
   buffer filters out whatever messages you have, the new ones keep
   accumulating in the PO Box's own mailbox!
 - It is possible for a process to have multiple PO Boxes, although
