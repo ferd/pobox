@@ -52,13 +52,13 @@
 %% message ordering.
 %% The initial state can be either passive or notify, depending on whether
 %% the user wants to get notifications of new messages as soon as possible.
--spec start_link(pid(), max(), 'stack' | 'queue') -> {ok, pid()}.
+-spec start_link(pid() | atom(), max(), 'stack' | 'queue') -> {ok, pid()}.
 start_link(Owner, Size, Type) ->
     start_link(Owner, Size, Type, notify).
 
 %% This one is messy because we have two clauses with 4 values, so we look them
 %% up based on guards.
--spec start_link(pid(), max(), 'stack' | 'queue', 'notify'|'passive') -> {ok, pid()}
+-spec start_link(pid() | atom(), max(), 'stack' | 'queue', 'notify'|'passive') -> {ok, pid()}
       ;         (term(), pid(), max(), stack | queue) -> {ok, pid()}.
 start_link(Owner, Size, Type, StateName) when is_pid(Owner);
                                               is_atom(Owner),
@@ -113,8 +113,10 @@ post(Box, Msg) ->
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 %% @private
-%% @TODO We should probably set up a link or monitor to the owner?
 init({Owner, Size, Type, StateName}) ->
+    if is_pid(Owner)  -> link(Owner);
+       is_atom(Owner) -> link(whereis(Owner))
+    end,
     {ok, StateName, #state{buf = buf_new(Type, Size), owner=Owner}}.
 
 %% @private

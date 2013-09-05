@@ -12,7 +12,8 @@ groups() ->
      {keep_old, [], [{group, all}]},
      {all, [], [notify_to_active, notify_to_overflow, no_api_post,
                 filter_skip, filter_drop, active_to_notify,
-                passive_to_notify, passive_to_active, resize]}
+                passive_to_notify, passive_to_active, resize,
+                linked_owner]}
     ].
 
 %%%%%%%%%%%%%%
@@ -55,12 +56,16 @@ init_per_group(_, Config) ->
 end_per_group(_, _Config) ->
     ok.
 
+init_per_testcase(linked_owner, Config) ->
+    [{size, 3} | Config];
 init_per_testcase(_, Config) ->
     Type = ?config(type, Config),
     Size = 3,
     {ok, Pid} = pobox:start_link(self(), Size, Type),
     [{pobox, Pid}, {size, Size} | Config].
 
+end_per_testcase(linked_owner, _Config) ->
+    ok;
 end_per_testcase(_, Config) ->
     Pid = ?config(pobox, Config),
     unlink(Pid),
@@ -280,6 +285,48 @@ resize(Config) ->
         keep_old ->
             Kept = [1,2,3]
     end.
+
+linked_owner(Config) ->
+    Type = ?config(type, Config),
+    Size = ?config(size, Config),
+    Trap = process_flag(trap_exit, true),
+    %% Can link to a regular process and catch the failure
+    Owner0 = spawn_link(fun() -> timer:sleep(infinity) end),
+    {ok,Box0} = pobox:start_link(Owner0, Size, Type),
+    wait_until(fun() -> 2 =:= length(element(2, process_info(Box0, links))) end, 100, 10),
+    wait_until(fun() -> 2 =:= length(element(2, process_info(Owner0, links))) end, 100, 10),
+    exit(Owner0, shutdown),
+    ?wait_msg({'EXIT', Owner0, _}),
+    ?wait_msg({'EXIT', Box0, _}),
+    %% Same thing works with named processes
+    Owner1 = spawn_link(fun() -> timer:sleep(infinity) end),
+    erlang:register(pobox_owner, Owner1),
+    {ok,Box1} = pobox:start_link(pobox_owner, Size, Type),
+    wait_until(fun() -> 2 =:= length(element(2, process_info(Box1, links))) end, 100, 10),
+    wait_until(fun() -> 2 =:= length(element(2, process_info(Owner1, links))) end, 100, 10),
+    exit(Owner1, shutdown),
+    ?wait_msg({'EXIT', Owner1, _}),
+    ?wait_msg({'EXIT', Box1, _}),
+    %% Unlinking totally makes things work with multiple procs though
+    Owner2 = spawn_link(fun() ->
+       receive {From, pobox, Pid} ->
+            unlink(Pid),
+            From ! ok,
+            timer:sleep(infinity)
+       end
+     end),
+    erlang:register(pobox_owner, Owner2),
+    {ok,Box2} = pobox:start_link(pobox_owner, Size, Type),
+    wait_until(fun() -> 2 =:= length(element(2, process_info(Box2, links))) end, 100, 10),
+    wait_until(fun() -> 2 =:= length(element(2, process_info(Owner2, links))) end, 100, 10),
+    Owner2 ! {self(), pobox, Box2},
+    ?wait_msg(ok),
+    exit(Owner2, shutdown),
+    ?wait_msg({'EXIT', Owner2, _}),
+    true = is_process_alive(Box2),
+    exit(Box2, different_reason),
+    ?wait_msg({'EXIT', Box2, different_reason}),
+    process_flag(trap_exit, Trap).
 
 %%%%%%%%%%%%%%%
 %%% HELPERS %%%

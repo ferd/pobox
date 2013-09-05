@@ -141,11 +141,13 @@ Where:
 - `Name` is any name a regular `gen_fsm` process can accept (including
   `{via,...}` tuples)
 - `OwnerPid` is the pid of the PO Box owner. It's the only one that can
-  communicate with it. Note that the PO Box does not monitor its owner,
-  and doesn't trap exits. At this point, the owner must make sure to
-  link to the PO Box. A future feature could be to allow to give away a
-  PO Box or to define a heir, similar to how it can be done with ETS
-  tables.
+  communicate with it in terms of setting state and reading messages.
+  The `OwnerPid` can be either a pid or an atom. The PO Box will set up
+  a link directly between itself and `OwnerPid`, and won't trap exits.
+  If you're using named processes (atoms) and want to have the PO Box
+  survive them individually, you should unlink the processes manually.
+  This also means that processes that terminate normally won't kill the
+  POBox.
 - `MaxSize` is the maximum number of messages in a buffer.
 - `BufferType` can be either `queue` or `stack` and specifies which type
   is going to be used.
@@ -304,11 +306,15 @@ These rules are strict, but we're nice people!
 
 This is more a wishlist than a roadmap, in no particular order:
 
-- Implement `give_away` and `heir` functionality to PO Boxes
+- Implement `give_away` and/or `heir` functionality to PO Boxes to make them
+  behave like ETS tables, or possibly just implementing `controlling_process`
+  to make them behave more like ports. Right now the semantics are those of
+  a mailbox, provided nobody unlinks the POBox from its owner process.
 - Provide default filter functions in a new module
 
 ## Changelog
 
+- 1.0.0: A PO Box links itself to the process that it receives data for.
 - 0.2.0: Added PO Box's pid in the `newdata` message so a process can own more
          than a PO Box. Changed internal queue and stack size monitoring to be
          O(1) in all cases.
