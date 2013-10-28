@@ -314,6 +314,8 @@ This is more a wishlist than a roadmap, in no particular order:
 
 ## Changelog
 
+- 1.0.1: fixing bug where manually dropped messages (with the active filter)
+         would result in wrong size values and crashes for queues.
 - 1.0.0: A PO Box links itself to the process that it receives data for.
 - 0.2.0: Added PO Box's pid in the `newdata` message so a process can own more
          than a PO Box. Changed internal queue and stack size monitoring to be
