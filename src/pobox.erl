@@ -230,7 +230,7 @@ resize_buf(NewMax, B=#buf{type=T, size=Size, drop=Drop, data=Data}) ->
 
 buf_filter(Buf=#buf{type=T, drop=D, data=Data, size=C}, Fun, State) ->
     {Msgs, Count, Dropped, NewData} = filter(T, Data, Fun, State),
-    {Msgs, Count, Dropped+D, Buf#buf{drop=0, size=C-Count, data=NewData}}.
+    {Msgs, Count, Dropped+D, Buf#buf{drop=0, size=C-(Count+Dropped), data=NewData}}.
 
 filter(T, Data, Fun, State) ->
     filter(T, Data, Fun, State, [], 0, 0).

@@ -13,7 +13,7 @@ groups() ->
      {all, [], [notify_to_active, notify_to_overflow, no_api_post,
                 filter_skip, filter_drop, active_to_notify,
                 passive_to_notify, passive_to_active, resize,
-                linked_owner]}
+                linked_owner, drop_count]}
     ].
 
 %%%%%%%%%%%%%%
@@ -327,6 +327,32 @@ linked_owner(Config) ->
     exit(Box2, different_reason),
     ?wait_msg({'EXIT', Box2, different_reason}),
     process_flag(trap_exit, Trap).
+
+drop_count(Config) ->
+    Type = ?config(type, Config),
+    Size = ?config(size, Config),
+    {ok, Box} = pobox:start_link(self(), Size, Type),
+    %% post and manually drop 3 messages, should be able to do it again
+    %% many times without a problem
+    [pobox:post(Box, N) || N <- lists:seq(1,Size)],
+    pobox:active(Box, fun(_, S) -> {drop, S} end, nostate),
+    ?wait_msg({mail, Box, [], 0, Size}),
+    [pobox:post(Box, N) || N <- lists:seq(1,Size)],
+    pobox:active(Box, fun(_, S) -> {drop, S} end, nostate),
+    ?wait_msg({mail, Box, [], 0, Size}),
+    [pobox:post(Box, N) || N <- lists:seq(1,Size)],
+    pobox:active(Box, fun(_, S) -> {drop, S} end, nostate),
+    ?wait_msg({mail, Box, [], 0, Size}),
+    [pobox:post(Box, N) || N <- lists:seq(1,Size)],
+    pobox:active(Box, fun(_, S) -> {drop, S} end, nostate),
+    ?wait_msg({mail, Box, [], 0, Size}),
+    [pobox:post(Box, N) || N <- lists:seq(1,Size)],
+    pobox:active(Box, fun(_, S) -> {drop, S} end, nostate),
+    ?wait_msg({mail, Box, [], 0, Size}),
+    true = is_process_alive(Box),
+    unlink(Box),
+    exit(Box, shutdown).
+
 
 %%%%%%%%%%%%%%%
 %%% HELPERS %%%
