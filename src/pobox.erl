@@ -36,9 +36,9 @@
                 filter_state :: term()}).
 
 -export([start_link/3, start_link/4, start_link/5, resize/2,
-         active/3, notify/1, post/2]).
+         active/3, proxy/3, notify/1, post/2]).
 -export([init/1,
-         active/2, passive/2, notify/2,
+         active/2, proxy/2, passive/2, notify/2,
          handle_event/3, handle_sync_event/4, handle_info/3,
          terminate/3, code_change/4]).
 
@@ -88,13 +88,26 @@ resize(Box, NewSize) when NewSize > 0 ->
 %% @doc Forces the buffer into an active state where it will
 %% send the data it has accumulated. The fun passed needs to have
 %% two arguments: A message, and a term for state. The function can return,
-%% for each element, a tuple of the form {Res, NewState}, where `Res' can be:
+%% for each element, a tuple of the form {Res, NewState} | `skip' to stop
+%% removing elements from the stack, and keep them for later.
+%% `Res' can be:
 %% - `{ok, Msg}' to receive the message in the block that gets shipped
 %% - `drop' to ignore the message
-%% - `skip' to stop removing elements from the stack, and keep them for later.
 -spec active(pid(), filter(), State::term()) -> ok.
 active(Box, Fun, FunState) when is_function(Fun,2) ->
     gen_fsm:send_event(Box, {active, Fun, FunState}).
+
+%% @doc Forces the buffer into an proxy state where it will
+%% send the data it has accumulated as soon as it arrives. The fun passed needs to have
+%% two arguments: A message, and a term for state. The function can return,
+%% for each element, a tuple of the form {Res, NewState} | `skip' to stop
+%% removing elements from the stack, and keep them for later.
+%% `Res' can be:
+%% - `{ok, Msg}' to receive the message in the block that gets shipped
+%% - `drop' to ignore the message
+-spec proxy(pid(), filter(), State::term()) -> ok.
+proxy(Box, Fun, FunState) when is_function(Fun,2) ->
+    gen_fsm:send_event(Box, {proxy, Fun, FunState}).
 
 %% @doc Forces the buffer into its notify state, where it will send a single
 %% message alerting the Owner of new messages before going back to the passive
@@ -122,14 +135,30 @@ init({Owner, Size, Type, StateName}) ->
 %% @private
 active({active, Fun, FunState}, S = #state{}) ->
     {next_state, active, S#state{filter=Fun, filter_state=FunState}};
+active({proxy, Fun, FunState}, S = #state{}) ->
+    {next_state, proxy, S#state{filter=Fun, filter_state=FunState}};
 active(notify, S = #state{}) ->
     {next_state, notify, S#state{filter=undefined, filter_state=undefined}};
 active({post, Msg}, S = #state{buf=Buf}) ->
     NewBuf = insert(Msg, Buf),
-    send(S#state{buf=NewBuf});
+    send(passive, S#state{buf=NewBuf});
 active(_Msg, S = #state{}) ->
     %% unexpected
     {next_state, active, S}.
+
+%% @private
+proxy({active, Fun, FunState}, S = #state{}) ->
+    {next_state, active, S#state{filter=Fun, filter_state=FunState}};
+proxy({proxy, Fun, FunState}, S = #state{}) ->
+    {next_state, proxy, S#state{filter=Fun, filter_state=FunState}};
+proxy(notify, S = #state{}) ->
+    {next_state, notify, S#state{filter=undefined, filter_state=undefined}};
+proxy({post, Msg}, S = #state{buf=Buf}) ->
+    NewBuf = insert(Msg, Buf),
+    send(proxy, S#state{buf=NewBuf});
+proxy(_Msg, S = #state{}) ->
+    %% unexpected
+    {next_state, proxy, S}.
 
 %% @private
 passive(notify, State = #state{buf=Buf}) ->
@@ -141,7 +170,13 @@ passive({active, Fun, FunState}, S = #state{buf=Buf}) ->
     NewState = S#state{filter=Fun, filter_state=FunState},
     case size(Buf) of
         0 -> {next_state, active, NewState};
-        N when N > 0 -> send(NewState)
+        N when N > 0 -> send(passive, NewState)
+    end;
+passive({proxy, Fun, FunState}, S = #state{buf=Buf}) ->
+    NewState = S#state{filter=Fun, filter_state=FunState},
+    case size(Buf) of
+        0 -> {next_state, proxy, NewState};
+        N when N > 0 -> send(proxy, NewState)
     end;
 passive({post, Msg}, S = #state{buf=Buf}) ->
     {next_state, passive, S#state{buf=insert(Msg, Buf)}};
@@ -154,7 +189,13 @@ notify({active, Fun, FunState}, S = #state{buf=Buf}) ->
     NewState = S#state{filter=Fun, filter_state=FunState},
     case size(Buf) of
         0 -> {next_state, active, NewState};
-        N when N > 0 -> send(NewState)
+        N when N > 0 -> send(passive, NewState)
+    end;
+notify({proxy, Fun, FunState}, S = #state{buf=Buf}) ->
+    NewState = S#state{filter=Fun, filter_state=FunState},
+    case size(Buf) of
+        0 -> {next_state, proxy, NewState};
+        N when N > 0 -> send(proxy, NewState)
     end;
 notify(notify, S = #state{}) ->
     {next_state, notify, S};
@@ -194,11 +235,17 @@ code_change(_OldVsn, StateName, State, _Extra) ->
 %%% Private Function Definitions %%%
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-send(S=#state{buf = Buf, owner=Pid, filter=Fun, filter_state=FilterState}) ->
+send(passive, S=#state{buf = Buf, owner=Pid, filter=Fun, filter_state=FilterState}) ->
     {Msgs, Count, Dropped, NewBuf} = buf_filter(Buf, Fun, FilterState),
     Pid ! {mail, self(), Msgs, Count, Dropped},
     NewState = S#state{buf=NewBuf, filter=undefined, filter_state=undefined},
-    {next_state, passive, NewState}.
+    {next_state, passive, NewState};
+
+send(proxy, S=#state{buf = Buf, owner=Pid, filter=Fun, filter_state=FilterState}) ->
+    {Msgs, Count, Dropped, NewBuf} = buf_filter(Buf, Fun, FilterState),
+    Pid ! {mail, self(), Msgs, Count, Dropped},
+    NewState = S#state{buf=NewBuf},
+    {next_state, proxy, NewState}.
 
 send_notification(S = #state{owner=Owner}) ->
     Owner ! {mail, self(), new_data},
