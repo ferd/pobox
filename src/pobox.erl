@@ -33,9 +33,13 @@
 -record(state, {buf :: buffer(),
                 owner :: pid(),
                 filter :: filter(),
-                filter_state :: term()}).
+                filter_state :: term(),
+                hibernate :: non_neg_integer() | infinity
+               }).
 
--export([start_link/3, start_link/4, start_link/5, resize/2,
+-export([start_link/3, start_link/4, start_link/5, 
+         start_link_opt/5, start_link_opt/6,
+         resize/2,
          active/3, proxy/3, notify/1, post/2]).
 -export([init/1,
          active/2, proxy/2, passive/2, notify/2,
@@ -63,7 +67,7 @@ start_link(Owner, Size, Type) ->
 start_link(Owner, Size, Type, StateName) when is_pid(Owner);
                                               is_atom(Owner),
                                               is_integer(Size), Size > 0 ->
-    gen_fsm:start_link(?MODULE, {Owner, Size, Type, StateName}, []);
+    gen_fsm:start_link(?MODULE, {Owner, Size, Type, StateName, []}, []);
 start_link(Name, Owner, Size, Type) ->
     start_link(Name, Owner, Size, Type, notify).
 
@@ -75,7 +79,29 @@ start_link(Name, Owner, Size, Type, StateName) when Size > 0,
                                                     Type =:= keep_old,
                                                     StateName =:= notify orelse
                                                     StateName =:= passive ->
-    gen_fsm:start_link(Name, ?MODULE, {Owner, Size, Type, StateName}, []).
+    gen_fsm:start_link(Name, ?MODULE, {Owner, Size, Type, StateName, []}, []).
+
+-spec start_link_opt(pid(), max(), stack | queue,
+                 'notify'|'passive', list()) -> {ok, pid()}.
+start_link_opt(Owner, Size, Type, StateName, Opt) when Size > 0,
+                                                       Type =:= queue orelse
+                                                       Type =:= stack orelse
+                                                       Type =:= keep_old,
+                                                       StateName =:= notify orelse
+                                                       StateName =:= passive,
+                                                       is_list(Opt) ->
+    gen_fsm:start_link(?MODULE, {Owner, Size, Type, StateName, Opt}, []).
+
+-spec start_link_opt(term(), pid(), max(), stack | queue,
+                 'notify'|'passive', list()) -> {ok, pid()}.
+start_link_opt(Name, Owner, Size, Type, StateName, Opt) when Size > 0,
+                                                             Type =:= queue orelse
+                                                             Type =:= stack orelse
+                                                             Type =:= keep_old,
+                                                             StateName =:= notify orelse
+                                                             StateName =:= passive,
+                                                             is_list(Opt) ->
+    gen_fsm:start_link(Name, ?MODULE, {Owner, Size, Type, StateName, Opt}, []).
 
 %% @doc Allows to take a given buffer, and make it larger or smaller.
 %% A buffer can be made larger without overhead, but it may take
@@ -126,102 +152,115 @@ post(Box, Msg) ->
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 %% @private
-init({Owner, Size, Type, StateName}) ->
+init({Owner, Size, Type, StateName, Opts}) ->
+    Timeout = proplists:get_value(hibernate, Opts, infinity),
     if is_pid(Owner)  -> link(Owner);
        is_atom(Owner) -> link(whereis(Owner))
     end,
-    {ok, StateName, #state{buf = buf_new(Type, Size), owner=Owner}}.
+    {ok, StateName, #state{buf = buf_new(Type, Size), owner=Owner, hibernate=Timeout}, Timeout}.
 
 %% @private
 active({active, Fun, FunState}, S = #state{}) ->
-    {next_state, active, S#state{filter=Fun, filter_state=FunState}};
+    {next_state, active, S#state{filter=Fun, filter_state=FunState}, S#state.hibernate};
 active({proxy, Fun, FunState}, S = #state{}) ->
-    {next_state, proxy, S#state{filter=Fun, filter_state=FunState}};
+    {next_state, proxy, S#state{filter=Fun, filter_state=FunState}, S#state.hibernate};
 active(notify, S = #state{}) ->
-    {next_state, notify, S#state{filter=undefined, filter_state=undefined}};
+    {next_state, notify, S#state{filter=undefined, filter_state=undefined}, S#state.hibernate};
 active({post, Msg}, S = #state{buf=Buf}) ->
     NewBuf = insert(Msg, Buf),
     send(passive, S#state{buf=NewBuf});
+active(timeout, S = #state{}) ->
+    {next_state, active, S, hibernate};
 active(_Msg, S = #state{}) ->
     %% unexpected
-    {next_state, active, S}.
+    {next_state, active, S, S#state.hibernate}.
 
 %% @private
-proxy({active, Fun, FunState}, S = #state{}) ->
-    {next_state, active, S#state{filter=Fun, filter_state=FunState}};
+proxy({active, Fun, FunState}, S = #state{buf=Buf}) ->
+    NewState = S#state{filter=Fun, filter_state=FunState},
+    case size(Buf) of
+        0 -> {next_state, active, NewState, NewState#state.hibernate};
+        N when N > 0 -> send(passive, NewState)
+    end;
 proxy({proxy, Fun, FunState}, S = #state{}) ->
-    {next_state, proxy, S#state{filter=Fun, filter_state=FunState}};
+    {next_state, proxy, S#state{filter=Fun, filter_state=FunState}, S#state.hibernate};
 proxy(notify, S = #state{}) ->
-    {next_state, notify, S#state{filter=undefined, filter_state=undefined}};
+    {next_state, notify, S#state{filter=undefined, filter_state=undefined}, S#state.hibernate};
 proxy({post, Msg}, S = #state{buf=Buf}) ->
     NewBuf = insert(Msg, Buf),
     send(proxy, S#state{buf=NewBuf});
+proxy(timeout, S = #state{}) ->
+    {next_state, proxy, S, hibernate};
 proxy(_Msg, S = #state{}) ->
     %% unexpected
-    {next_state, proxy, S}.
+    {next_state, proxy, S, S#state.hibernate}.
 
 %% @private
 passive(notify, State = #state{buf=Buf}) ->
     case size(Buf) of
-        0 -> {next_state, notify, State};
+        0 -> {next_state, notify, State, State#state.hibernate};
         N when N > 0 -> send_notification(State)
     end;
 passive({active, Fun, FunState}, S = #state{buf=Buf}) ->
     NewState = S#state{filter=Fun, filter_state=FunState},
     case size(Buf) of
-        0 -> {next_state, active, NewState};
+        0 -> {next_state, active, NewState, NewState#state.hibernate};
         N when N > 0 -> send(passive, NewState)
     end;
 passive({proxy, Fun, FunState}, S = #state{buf=Buf}) ->
     NewState = S#state{filter=Fun, filter_state=FunState},
     case size(Buf) of
-        0 -> {next_state, proxy, NewState};
+        0 -> {next_state, proxy, NewState, NewState#state.hibernate};
         N when N > 0 -> send(proxy, NewState)
     end;
 passive({post, Msg}, S = #state{buf=Buf}) ->
-    {next_state, passive, S#state{buf=insert(Msg, Buf)}};
+    {next_state, passive, S#state{buf=insert(Msg, Buf)}, S#state.hibernate};
+passive(timeout, S = #state{}) ->
+    {next_state, passive, S, hibernate};
 passive(_Msg, S = #state{}) ->
     %% unexpected
-    {next_state, passive, S}.
+    {next_state, passive, S, S#state.hibernate}.
 
 %% @private
 notify({active, Fun, FunState}, S = #state{buf=Buf}) ->
     NewState = S#state{filter=Fun, filter_state=FunState},
     case size(Buf) of
-        0 -> {next_state, active, NewState};
+        0 -> {next_state, active, NewState, NewState#state.hibernate};
         N when N > 0 -> send(passive, NewState)
     end;
 notify({proxy, Fun, FunState}, S = #state{buf=Buf}) ->
     NewState = S#state{filter=Fun, filter_state=FunState},
     case size(Buf) of
-        0 -> {next_state, proxy, NewState};
+        0 -> {next_state, proxy, NewState, NewState#state.hibernate};
         N when N > 0 -> send(proxy, NewState)
     end;
 notify(notify, S = #state{}) ->
-    {next_state, notify, S};
+    {next_state, notify, S, S#state.hibernate};
 notify({post, Msg}, S = #state{buf=Buf}) ->
     send_notification(S#state{buf=insert(Msg, Buf)});
+notify(timeout, S = #state{}) ->
+    {next_state, notify, S, hibernate};
 notify(_Msg, S = #state{}) ->
     %% unexpected
-    {next_state, notify, S}.
+    {next_state, notify, S, S#state.hibernate}.
 
 %% @private
 handle_event(_Event, StateName, State) ->
-    {next_state, StateName, State}.
+    {next_state, StateName, State, State#state.hibernate}.
 
 %% @private
 handle_sync_event({resize, NewSize}, _From, StateName, S=#state{buf=Buf}) ->
-    {reply, ok, StateName, S#state{buf=resize_buf(NewSize,Buf)}};
+    {reply, ok, StateName, S#state{buf=resize_buf(NewSize,Buf)}, S#state.hibernate};
 handle_sync_event(_Event, _From, StateName, State) ->
     %% die of starvation, caller!
-    {next_state, StateName, State}.
+    {next_state, StateName, State, State#state.hibernate}.
 
 %% @private
 handle_info({post, Msg}, StateName, State) ->
     %% We allow anonymous posting and redirect it to the internal form.
     ?MODULE:StateName({post, Msg}, State);
 handle_info(_Info, StateName, State) ->
-    {next_state, StateName, State}.
+    {next_state, StateName, State, State#state.hibernate}.
 
 %% @private
 terminate(_Reason, _StateName, _State) ->
@@ -239,17 +278,17 @@ send(passive, S=#state{buf = Buf, owner=Pid, filter=Fun, filter_state=FilterStat
     {Msgs, Count, Dropped, NewBuf} = buf_filter(Buf, Fun, FilterState),
     Pid ! {mail, self(), Msgs, Count, Dropped},
     NewState = S#state{buf=NewBuf, filter=undefined, filter_state=undefined},
-    {next_state, passive, NewState};
+    {next_state, passive, NewState, NewState#state.hibernate};
 
 send(proxy, S=#state{buf = Buf, owner=Pid, filter=Fun, filter_state=FilterState}) ->
     {Msgs, Count, Dropped, NewBuf} = buf_filter(Buf, Fun, FilterState),
     Pid ! {mail, self(), Msgs, Count, Dropped},
     NewState = S#state{buf=NewBuf},
-    {next_state, proxy, NewState}.
+    {next_state, proxy, NewState, NewState#state.hibernate}.
 
 send_notification(S = #state{owner=Owner}) ->
     Owner ! {mail, self(), new_data},
-    {next_state, passive, S}.
+    {next_state, passive, S, S#state.hibernate}.
 
 %%% Generic buffer ops
 -spec buf_new('queue' | 'stack' | 'keep_old', max()) -> buffer().
