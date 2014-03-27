@@ -314,6 +314,8 @@ This is more a wishlist than a roadmap, in no particular order:
 
 ## Changelog
 
+- 1.0.2 (master/in progress): explicitly specify `registered` to be `[]` for
+                              relx compatibility
 - 1.0.1: fixing bug where manually dropped messages (with the active filter)
          would result in wrong size values and crashes for queues.
 - 1.0.0: A PO Box links itself to the process that it receives data for.

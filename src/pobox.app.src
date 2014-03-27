@@ -1,6 +1,7 @@
 {application, pobox, [
  {description, "External buffer processes to protect against mailbox overflow"},
- {vsn, "1.0.1"},
+ {vsn, "1.0.2"},
  {applications, [stdlib, kernel]},
+ {registered, []},
  {modules, [pobox]}
 ]}.
