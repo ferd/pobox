@@ -15,7 +15,7 @@
               max = undefined :: max(),
               size = 0 :: non_neg_integer(),
               drop = 0 :: drop(),
-              data = undefined :: queue() | list()}).
+              data = undefined :: queue:queue() | list()}).
 
 -type max() :: pos_integer().
 -type drop() :: non_neg_integer().
