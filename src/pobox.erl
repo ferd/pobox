@@ -11,11 +11,19 @@
 -behaviour(gen_fsm).
 -compile({no_auto_import,[size/1]}).
 
+-ifdef(namespaced_types).
+-record(buf, {type = undefined :: 'stack' | 'queue' | 'keep_old',
+              max = undefined :: max(),
+              size = 0 :: non_neg_integer(),
+              drop = 0 :: drop(),
+              data = undefined :: queue:queue() | list()}).
+-else.
 -record(buf, {type = undefined :: 'stack' | 'queue' | 'keep_old',
               max = undefined :: max(),
               size = 0 :: non_neg_integer(),
               drop = 0 :: drop(),
               data = undefined :: queue() | list()}).
+-endif.
 
 -type max() :: pos_integer().
 -type drop() :: non_neg_integer().
