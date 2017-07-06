@@ -314,6 +314,7 @@ This is more a wishlist than a roadmap, in no particular order:
 
 ## Changelog
 
+- 1.0.3: fix typespecs to generate fewer errors
 - 1.0.2: explicitly specify `registered` to be `[]` for
          relx compatibility, switch to rebar3
 - 1.0.1: fixing bug where manually dropped messages (with the active filter)

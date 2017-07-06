@@ -12,17 +12,17 @@
 -compile({no_auto_import,[size/1]}).
 
 -ifdef(namespaced_types).
--record(buf, {type = undefined :: 'stack' | 'queue' | 'keep_old',
-              max = undefined :: max(),
+-record(buf, {type = undefined :: undefined | 'stack' | 'queue' | 'keep_old',
+              max = undefined :: undefined | max(),
               size = 0 :: non_neg_integer(),
               drop = 0 :: drop(),
-              data = undefined :: queue:queue() | list()}).
+              data = undefined :: undefined | queue:queue() | list()}).
 -else.
--record(buf, {type = undefined :: 'stack' | 'queue' | 'keep_old',
-              max = undefined :: max(),
+-record(buf, {type = undefined :: undefined | 'stack' | 'queue' | 'keep_old',
+              max = undefined :: undefined | max(),
               size = 0 :: non_neg_integer(),
               drop = 0 :: drop(),
-              data = undefined :: queue() | list()}).
+              data = undefined :: undefined | queue() | list()}).
 -endif.
 
 -type max() :: pos_integer().
@@ -35,13 +35,14 @@
 -type note() :: {'mail', Self::pid(), new_data}.
 -type mail() :: {'mail', Self::pid(), Msgs::list(),
                          Count::non_neg_integer(), Lost::drop()}.
+-type name() :: {local, atom()} | {global, term()} | atom() | pid() | {via, module(), term()}.
 
 -export_type([max/0, filter/0, in/0, mail/0, note/0]).
 
 -record(state, {buf :: buffer(),
                 owner :: pid(),
-                filter :: filter(),
-                filter_state :: term()}).
+                filter :: undefined | filter(),
+                filter_state :: undefined | term()}).
 
 -export([start_link/3, start_link/4, start_link/5, resize/2,
          active/3, notify/1, post/2]).
@@ -60,13 +61,13 @@
 %% message ordering.
 %% The initial state can be either passive or notify, depending on whether
 %% the user wants to get notifications of new messages as soon as possible.
--spec start_link(pid() | atom(), max(), 'stack' | 'queue') -> {ok, pid()}.
+-spec start_link(name(), max(), 'stack' | 'queue') -> {ok, pid()}.
 start_link(Owner, Size, Type) ->
     start_link(Owner, Size, Type, notify).
 
 %% This one is messy because we have two clauses with 4 values, so we look them
 %% up based on guards.
--spec start_link(pid() | atom(), max(), 'stack' | 'queue', 'notify'|'passive') -> {ok, pid()}
+-spec start_link(name(), max(), 'stack' | 'queue', 'notify'|'passive') -> {ok, pid()}
       ;         (term(), pid(), max(), stack | queue) -> {ok, pid()}.
 start_link(Owner, Size, Type, StateName) when is_pid(Owner);
                                               is_atom(Owner),
@@ -75,7 +76,7 @@ start_link(Owner, Size, Type, StateName) when is_pid(Owner);
 start_link(Name, Owner, Size, Type) ->
     start_link(Name, Owner, Size, Type, notify).
 
--spec start_link(term(), pid(), max(), stack | queue,
+-spec start_link(name(), pid(), max(), stack | queue,
                  'notify'|'passive') -> {ok, pid()}.
 start_link(Name, Owner, Size, Type, StateName) when Size > 0,
                                                     Type =:= queue orelse
@@ -89,7 +90,7 @@ start_link(Name, Owner, Size, Type, StateName) when Size > 0,
 %% A buffer can be made larger without overhead, but it may take
 %% more work to make it smaller given there could be a
 %% need to drop messages that would now be considered overflow.
--spec resize(pid(), max()) -> ok.
+-spec resize(name(), max()) -> ok.
 resize(Box, NewSize) when NewSize > 0 ->
     gen_fsm:sync_send_all_state_event(Box, {resize, NewSize}).
 
@@ -100,19 +101,19 @@ resize(Box, NewSize) when NewSize > 0 ->
 %% - `{ok, Msg}' to receive the message in the block that gets shipped
 %% - `drop' to ignore the message
 %% - `skip' to stop removing elements from the stack, and keep them for later.
--spec active(pid(), filter(), State::term()) -> ok.
+-spec active(name(), filter(), State::term()) -> ok.
 active(Box, Fun, FunState) when is_function(Fun,2) ->
     gen_fsm:send_event(Box, {active, Fun, FunState}).
 
 %% @doc Forces the buffer into its notify state, where it will send a single
 %% message alerting the Owner of new messages before going back to the passive
 %% state.
--spec notify(pid()) -> ok.
+-spec notify(name()) -> ok.
 notify(Box) ->
     gen_fsm:send_event(Box, notify).
 
 %% @doc Sends a message to the PO Box, to be buffered.
--spec post(pid(), term()) -> ok.
+-spec post(name(), term()) -> ok.
 post(Box, Msg) ->
     gen_fsm:send_event(Box, {post, Msg}).
 
