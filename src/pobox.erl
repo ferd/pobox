@@ -67,7 +67,7 @@ start_link(Owner, Size, Type) ->
 %% This one is messy because we have two clauses with 4 values, so we look them
 %% up based on guards.
 -spec start_link(name(), max(), 'stack' | 'queue', 'notify'|'passive') -> {ok, pid()}
-                (term(), pid(), max(), stack | queue) -> {ok, pid()}.
+        ;       (term(), pid(), max(), stack | queue) -> {ok, pid()}.
 start_link(Owner, Size, Type, StateName) when is_pid(Owner);
                                               is_atom(Owner),
                                               is_integer(Size), Size > 0 ->
