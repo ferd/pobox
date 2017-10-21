@@ -188,17 +188,14 @@ notify(info, Msg, Data) ->
     handle_info(Msg, notify, Data).
         
 
-
-
 %% @private
 handle_call(From, {resize, NewSize}, S=#state{buf=Buf}) ->
     {keep_state, S#state{buf=resize_buf(NewSize,Buf)}, 
         [{reply, From, ok}]};
 
 handle_call(_From, _Msg, _Data) ->
-    %% Unexpected
+    %% die of starvation, caller!
     keep_state_and_data.
-
 
 %% @private
 handle_info({post, Msg}, StateName, State) ->
