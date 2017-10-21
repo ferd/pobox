@@ -199,7 +199,7 @@ active_to_notify(Config) ->
     %% We should be in passive mode.
     passive = get_statename(Box),
     pobox:active(Box, fun(X,State) -> {{ok,X}, State} end, no_state),
-    wait_until(fun() -> active =:= get_statename(Box) end, 100, 10),
+    wait_until(fun() -> active_s =:= get_statename(Box) end, 100, 10),
     pobox:notify(Box),
     wait_until(fun() -> notify =:= get_statename(Box) end, 100, 10),
     pobox:post(Box, 2),
@@ -245,7 +245,7 @@ passive_to_active(Config) ->
     %% We should be in passive mode.
     passive = get_statename(Box),
     pobox:active(Box, Filter, no_state),
-    wait_until(fun() -> active =:= get_statename(Box) end, 100, 10),
+    wait_until(fun() -> active_s =:= get_statename(Box) end, 100, 10),
     %% Then we should be receiving mail after a post
     pobox:post(Box, 2),
     ?wait_msg({mail,Box,[2],1,0}),
@@ -358,11 +358,8 @@ drop_count(Config) ->
 %%% HELPERS %%%
 %%%%%%%%%%%%%%%
 get_statename(Pid) ->
-    %% Woo, yet another list comprehension as a monad!
-    hd([Name || L=[_|_] <- element(4,sys:get_status(Pid)),
-                Data=[_|_] <- [proplists:get_value(data, L)],
-                Name <- [proplists:get_value("StateName",Data,0)],
-                is_atom(Name)]).
+    {State, _} = sys:get_state(Pid),
+    State.
 
 wait_until(Fun, _, 0) -> error({timeout, Fun});
 wait_until(Fun, Interval, Tries) ->

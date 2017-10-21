@@ -47,7 +47,7 @@
 -export([start_link/3, start_link/4, start_link/5, 
         resize/2, active/3, notify/1, post/2]).
 -export([init/1,
-         active/3, passive/3, notify/3,
+         active_s/3, passive/3, notify/3,
          callback_mode/0, terminate/3, code_change/4]).
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -102,7 +102,7 @@ resize(Box, NewSize) when NewSize > 0 ->
 %% - `skip' to stop removing elements from the stack, and keep them for later.
 -spec active(name(), filter(), State::term()) -> ok.
 active(Box, Fun, FunState) when is_function(Fun,2) ->
-    gen_statem:cast(Box, {active, Fun, FunState}).
+    gen_statem:cast(Box, {active_s, Fun, FunState}).
 
 %% @doc Forces the buffer into its notify state, where it will send a single
 %% message alerting the Owner of new messages before going back to the passive
@@ -131,20 +131,20 @@ init({Owner, Size, Type, StateName}) ->
     {ok, StateName, #state{buf = buf_new(Type, Size), owner=Owner}}.
 
 %% @private
-active(cast, {active, Fun, FunState}, S = #state{}) ->
-    {next_state, active, S#state{filter=Fun, filter_state=FunState}};
-active(cast, notify, S = #state{}) ->
+active_s(cast, {active_s, Fun, FunState}, S = #state{}) ->
+    {next_state, active_s, S#state{filter=Fun, filter_state=FunState}};
+active_s(cast, notify, S = #state{}) ->
     {next_state, notify, S#state{filter=undefined, filter_state=undefined}};
-active(cast, {post, Msg}, S = #state{buf=Buf}) ->
+active_s(cast, {post, Msg}, S = #state{buf=Buf}) ->
     NewBuf = insert(Msg, Buf),
     send(S#state{buf=NewBuf});
-active(cast, _Msg, _State) ->
+active_s(cast, _Msg, _State) ->
     %% unexpected
     keep_state_and_data;
-active({call, From}, Msg, Data) ->    
+active_s({call, From}, Msg, Data) ->    
     handle_call(From, Msg, Data);
-active({info, Msg}, StateName, Data) ->    
-    handle_info(Msg, StateName, Data).
+active_s(info, Msg, Data) ->    
+    handle_info(Msg, active_s, Data).
 
 %% @private
 passive(cast, notify, State = #state{buf=Buf}) ->
@@ -152,10 +152,10 @@ passive(cast, notify, State = #state{buf=Buf}) ->
         0 -> {next_state, notify, State};
         N when N > 0 -> send_notification(State)
     end;
-passive(cast, {active, Fun, FunState}, S = #state{buf=Buf}) ->
+passive(cast, {active_s, Fun, FunState}, S = #state{buf=Buf}) ->
     NewState = S#state{filter=Fun, filter_state=FunState},
     case size(Buf) of
-        0 -> {next_state, active, NewState};
+        0 -> {next_state, active_s, NewState};
         N when N > 0 -> send(NewState)
     end;
 passive(cast, {post, Msg}, S = #state{buf=Buf}) ->
@@ -165,14 +165,14 @@ passive(cast, _Msg, _State) ->
     keep_state_and_data;
 passive({call, From}, Msg, Data) ->    
     handle_call(From, Msg, Data);
-passive({info, Msg}, StateName, Data) ->    
-    handle_info(Msg, StateName, Data).
+passive(info, Msg, Data) ->    
+    handle_info(Msg, passive, Data).
 
 %% @private
-notify(cast, {active, Fun, FunState}, S = #state{buf=Buf}) ->
+notify(cast, {active_s, Fun, FunState}, S = #state{buf=Buf}) ->
     NewState = S#state{filter=Fun, filter_state=FunState},
     case size(Buf) of
-        0 -> {next_state, active, NewState};
+        0 -> {next_state, active_s, NewState};
         N when N > 0 -> send(NewState)
     end;
 notify(cast, notify, S = #state{}) ->
@@ -184,8 +184,9 @@ notify(cast, _Msg, _State) ->
     keep_state_and_data;
 notify({call, From}, Msg, Data) ->    
     handle_call(From, Msg, Data);
-notify({info, Msg}, StateName, Data) ->    
-    handle_info(Msg, StateName, Data).    
+notify(info, Msg, Data) ->    
+    handle_info(Msg, notify, Data).
+        
 
 
 
@@ -202,8 +203,7 @@ handle_call(_From, _Msg, _Data) ->
 %% @private
 handle_info({post, Msg}, StateName, State) ->
     %% We allow anonymous posting and redirect it to the internal form.
-    ?MODULE:StateName({post, Msg}, State),
-    keep_state_and_data;
+    ?MODULE:StateName(cast, {post, Msg}, State);
 
 handle_info(_Info, _StateName, _State) ->
     keep_state_and_data.
