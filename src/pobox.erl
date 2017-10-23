@@ -8,7 +8,7 @@
 %% @end
 %%%-------------------------------------------------------------------
 -module(pobox).
--behaviour(gen_fsm).
+-behaviour(gen_statem).
 -compile({no_auto_import,[size/1]}).
 
 -ifdef(namespaced_types).
@@ -44,12 +44,11 @@
                 filter :: undefined | filter(),
                 filter_state :: undefined | term()}).
 
--export([start_link/3, start_link/4, start_link/5, resize/2,
-         active/3, notify/1, post/2]).
+-export([start_link/3, start_link/4, start_link/5, 
+        resize/2, active/3, notify/1, post/2]).
 -export([init/1,
-         active/2, passive/2, notify/2,
-         handle_event/3, handle_sync_event/4, handle_info/3,
-         terminate/3, code_change/4]).
+         active_s/3, passive/3, notify/3,
+         callback_mode/0, terminate/3, code_change/4]).
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%% API Function Definitions %%%
@@ -68,11 +67,11 @@ start_link(Owner, Size, Type) ->
 %% This one is messy because we have two clauses with 4 values, so we look them
 %% up based on guards.
 -spec start_link(name(), max(), 'stack' | 'queue', 'notify'|'passive') -> {ok, pid()}
-      ;         (term(), pid(), max(), stack | queue) -> {ok, pid()}.
+        ;       (term(), pid(), max(), stack | queue) -> {ok, pid()}.
 start_link(Owner, Size, Type, StateName) when is_pid(Owner);
                                               is_atom(Owner),
                                               is_integer(Size), Size > 0 ->
-    gen_fsm:start_link(?MODULE, {Owner, Size, Type, StateName}, []);
+    gen_statem:start_link(?MODULE, {Owner, Size, Type, StateName}, []);
 start_link(Name, Owner, Size, Type) ->
     start_link(Name, Owner, Size, Type, notify).
 
@@ -84,7 +83,7 @@ start_link(Name, Owner, Size, Type, StateName) when Size > 0,
                                                     Type =:= keep_old,
                                                     StateName =:= notify orelse
                                                     StateName =:= passive ->
-    gen_fsm:start_link(Name, ?MODULE, {Owner, Size, Type, StateName}, []).
+    gen_statem:start_link(Name, ?MODULE, {Owner, Size, Type, StateName}, []).
 
 %% @doc Allows to take a given buffer, and make it larger or smaller.
 %% A buffer can be made larger without overhead, but it may take
@@ -92,7 +91,7 @@ start_link(Name, Owner, Size, Type, StateName) when Size > 0,
 %% need to drop messages that would now be considered overflow.
 -spec resize(name(), max()) -> ok.
 resize(Box, NewSize) when NewSize > 0 ->
-    gen_fsm:sync_send_all_state_event(Box, {resize, NewSize}).
+    gen_statem:call(Box, {resize, NewSize}).
 
 %% @doc Forces the buffer into an active state where it will
 %% send the data it has accumulated. The fun passed needs to have
@@ -103,23 +102,26 @@ resize(Box, NewSize) when NewSize > 0 ->
 %% - `skip' to stop removing elements from the stack, and keep them for later.
 -spec active(name(), filter(), State::term()) -> ok.
 active(Box, Fun, FunState) when is_function(Fun,2) ->
-    gen_fsm:send_event(Box, {active, Fun, FunState}).
+    gen_statem:cast(Box, {active_s, Fun, FunState}).
 
 %% @doc Forces the buffer into its notify state, where it will send a single
 %% message alerting the Owner of new messages before going back to the passive
 %% state.
 -spec notify(name()) -> ok.
 notify(Box) ->
-    gen_fsm:send_event(Box, notify).
+    gen_statem:cast(Box, notify).
 
 %% @doc Sends a message to the PO Box, to be buffered.
 -spec post(name(), term()) -> ok.
 post(Box, Msg) ->
-    gen_fsm:send_event(Box, {post, Msg}).
+    gen_statem:cast(Box, {post, Msg}).
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%%% gen_fsm Function Definitions %%%
+%%% gen_statem Function Definitions %%%
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+callback_mode() ->
+    state_functions.
 
 %% @private
 init({Owner, Size, Type, StateName}) ->
@@ -129,67 +131,79 @@ init({Owner, Size, Type, StateName}) ->
     {ok, StateName, #state{buf = buf_new(Type, Size), owner=Owner}}.
 
 %% @private
-active({active, Fun, FunState}, S = #state{}) ->
-    {next_state, active, S#state{filter=Fun, filter_state=FunState}};
-active(notify, S = #state{}) ->
+active_s(cast, {active_s, Fun, FunState}, S = #state{}) ->
+    {next_state, active_s, S#state{filter=Fun, filter_state=FunState}};
+active_s(cast, notify, S = #state{}) ->
     {next_state, notify, S#state{filter=undefined, filter_state=undefined}};
-active({post, Msg}, S = #state{buf=Buf}) ->
+active_s(cast, {post, Msg}, S = #state{buf=Buf}) ->
     NewBuf = insert(Msg, Buf),
     send(S#state{buf=NewBuf});
-active(_Msg, S = #state{}) ->
+active_s(cast, _Msg, _State) ->
     %% unexpected
-    {next_state, active, S}.
+    keep_state_and_data;
+active_s({call, From}, Msg, Data) ->    
+    handle_call(From, Msg, Data);
+active_s(info, Msg, Data) ->    
+    handle_info(Msg, active_s, Data).
 
 %% @private
-passive(notify, State = #state{buf=Buf}) ->
+passive(cast, notify, State = #state{buf=Buf}) ->
     case size(Buf) of
         0 -> {next_state, notify, State};
         N when N > 0 -> send_notification(State)
     end;
-passive({active, Fun, FunState}, S = #state{buf=Buf}) ->
+passive(cast, {active_s, Fun, FunState}, S = #state{buf=Buf}) ->
     NewState = S#state{filter=Fun, filter_state=FunState},
     case size(Buf) of
-        0 -> {next_state, active, NewState};
+        0 -> {next_state, active_s, NewState};
         N when N > 0 -> send(NewState)
     end;
-passive({post, Msg}, S = #state{buf=Buf}) ->
+passive(cast, {post, Msg}, S = #state{buf=Buf}) ->
     {next_state, passive, S#state{buf=insert(Msg, Buf)}};
-passive(_Msg, S = #state{}) ->
+passive(cast, _Msg, _State) ->
     %% unexpected
-    {next_state, passive, S}.
+    keep_state_and_data;
+passive({call, From}, Msg, Data) ->    
+    handle_call(From, Msg, Data);
+passive(info, Msg, Data) ->    
+    handle_info(Msg, passive, Data).
 
 %% @private
-notify({active, Fun, FunState}, S = #state{buf=Buf}) ->
+notify(cast, {active_s, Fun, FunState}, S = #state{buf=Buf}) ->
     NewState = S#state{filter=Fun, filter_state=FunState},
     case size(Buf) of
-        0 -> {next_state, active, NewState};
+        0 -> {next_state, active_s, NewState};
         N when N > 0 -> send(NewState)
     end;
-notify(notify, S = #state{}) ->
+notify(cast, notify, S = #state{}) ->
     {next_state, notify, S};
-notify({post, Msg}, S = #state{buf=Buf}) ->
+notify(cast, {post, Msg}, S = #state{buf=Buf}) ->
     send_notification(S#state{buf=insert(Msg, Buf)});
-notify(_Msg, S = #state{}) ->
+notify(cast, _Msg, _State) ->
     %% unexpected
-    {next_state, notify, S}.
+    keep_state_and_data;
+notify({call, From}, Msg, Data) ->    
+    handle_call(From, Msg, Data);
+notify(info, Msg, Data) ->    
+    handle_info(Msg, notify, Data).
+        
 
 %% @private
-handle_event(_Event, StateName, State) ->
-    {next_state, StateName, State}.
+handle_call(From, {resize, NewSize}, S=#state{buf=Buf}) ->
+    {keep_state, S#state{buf=resize_buf(NewSize,Buf)}, 
+        [{reply, From, ok}]};
 
-%% @private
-handle_sync_event({resize, NewSize}, _From, StateName, S=#state{buf=Buf}) ->
-    {reply, ok, StateName, S#state{buf=resize_buf(NewSize,Buf)}};
-handle_sync_event(_Event, _From, StateName, State) ->
+handle_call(_From, _Msg, _Data) ->
     %% die of starvation, caller!
-    {next_state, StateName, State}.
+    keep_state_and_data.
 
 %% @private
 handle_info({post, Msg}, StateName, State) ->
     %% We allow anonymous posting and redirect it to the internal form.
-    ?MODULE:StateName({post, Msg}, State);
-handle_info(_Info, StateName, State) ->
-    {next_state, StateName, State}.
+    ?MODULE:StateName(cast, {post, Msg}, State);
+
+handle_info(_Info, _StateName, _State) ->
+    keep_state_and_data.
 
 %% @private
 terminate(_Reason, _StateName, _State) ->
