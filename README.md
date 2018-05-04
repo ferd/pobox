@@ -90,8 +90,10 @@ The FSM can be illustrated as crappy ASCII as:
 
 ## Types of buffer
 
-Currently, there are three types of buffers supported: queues and stacks,
-and `keep_old` queues.
+Currently, there are three types of built-in buffers supported: queues
+and stacks, and `keep_old` queues. You can also provide your own
+buffer implementation using the `pobox_buf` behaviour. See
+`samples/pobox_queue_buf.erl` for an example implementation.
 
 Queues will keep messages in order, and drop oldest messages to make
 place for new ones. If you have a buffer of size 3 and receive messages
@@ -149,8 +151,9 @@ Where:
   This also means that processes that terminate normally won't kill the
   POBox.
 - `MaxSize` is the maximum number of messages in a buffer.
-- `BufferType` can be either `queue` or `stack` and specifies which type
-  is going to be used.
+- `BufferType` can be either `queue`, `stack` or `keep_old` and specifies
+  which type is going to be used. You can also provide your buffer module
+  using `{mod, Module}`.
 - `InitialState` can be either `passive` or `notify`. The default value
   is set to `notify`. Having the buffer passive is desirable when you
   start it during an asynchronous `init` and do not want to receive
@@ -313,7 +316,7 @@ This is more a wishlist than a roadmap, in no particular order:
 - Provide default filter functions in a new module
 
 ## Changelog
-
+- 1.0.5: added `pobox_buf` behaviour to add custom buffer implementations
 - 1.0.4: move to gen\_statem implementation to avoid OTP 21 compile errors and OTP 20 warnings
 - 1.0.3: fix typespecs to generate fewer errors
 - 1.0.2: explicitly specify `registered` to be `[]` for
@@ -333,3 +336,4 @@ This is more a wishlist than a roadmap, in no particular order:
 - Fred Hebert / @ferd: library generalization and current implementation
 - Geoff Cant / @archaelus: design, original implementation
 - Jean-Samuel Bédard / @jsbed: adaptation to gen\_statem behaviour
+- Eric des Courtis / @edescourtis: added `pobox_buf` behaviour

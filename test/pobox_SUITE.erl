@@ -2,7 +2,7 @@
 -include_lib("common_test/include/ct.hrl").
 -compile(export_all).
 
-all() -> [{group, queue}, {group, stack}, {group, keep_old}].
+all() -> [{group, queue}, {group, stack}, {group, keep_old}, {group, pobox_queue_buf}].
 groups() ->
     %% Nested groups for eternal glory. We use one group to declare all the
     %% tests ('all' group), and then nest it in 'stack' and 'queue' groups,
@@ -10,6 +10,7 @@ groups() ->
     [{queue, [], [{group, all}]},
      {stack, [], [{group, all}]},
      {keep_old, [], [{group, all}]},
+     {pobox_queue_buf, [], [{group, all}]},
      {all, [], [notify_to_active, notify_to_overflow, no_api_post,
                 filter_skip, filter_drop, active_to_notify,
                 passive_to_notify, passive_to_active, resize,
@@ -50,6 +51,8 @@ init_per_group(stack, Config) ->
     [{type, stack} | Config];
 init_per_group(keep_old, Config) ->
     [{type, keep_old} | Config];
+init_per_group(pobox_queue_buf, Config) ->
+    [{type, {mod, pobox_queue_buf}} | Config];
 init_per_group(_, Config) ->
     Config.
 
@@ -91,6 +94,8 @@ notify_to_active(Config) ->
     case ?config(type, Config) of
         queue -> % queues are in order
             Sent = Msgs;
+        {mod, pobox_queue_buf} -> % queues are in order
+            Sent = Msgs;
         stack -> % We don't care for the order
             Sent = lists:sort(Msgs);
         keep_old -> % in order, no benefit for out-of-order
@@ -115,6 +120,8 @@ notify_to_overflow(Config) ->
     %% Based on the type, we have different guarantees
     case ?config(type, Config) of
         queue -> % queues are in order. We expect to have lost the 1st msgs
+            Msgs = lists:seq(Size+1, Size*2); % we dropped 1..Size
+        {mod, pobox_queue_buf} -> % queues are in order. We expect to have lost the 1st msgs
             Msgs = lists:seq(Size+1, Size*2); % we dropped 1..Size
         stack -> % We don't care for the order. We have all oldest + 1 newest
             Kept = lists:sort([Size*2 | lists:seq(1,Size-1)]),
@@ -156,6 +163,8 @@ filter_skip(Config) ->
     case ?config(type, Config) of
         queue ->
             [1,2,3] = [Msg1, Msg2, Msg3];
+        {mod, pobox_queue_buf} ->
+            [1,2,3] = [Msg1, Msg2, Msg3];
         stack ->
             [3,2,1] = [Msg1, Msg2, Msg3];
         keep_old ->
@@ -181,6 +190,8 @@ filter_drop(Config) ->
     [MsgExtra] = lists:sort(?wait_msg({mail,Box,Msgs,1,0}, Msgs)),
     case ?config(type, Config) of
         queue ->
+            [1,4] = MsgList ++ [MsgExtra];
+        {mod, pobox_queue_buf} ->
             [1,4] = MsgList ++ [MsgExtra];
         stack ->
             [3,4] = MsgList ++ [MsgExtra];
@@ -279,6 +290,8 @@ resize(Config) ->
     Kept = ?wait_msg({mail,Box,Msgs,3,3}, Msgs), % lost the surplus
     case ?config(type, Config) of
         queue ->
+            Kept = [4,5,6];
+        {mod, pobox_queue_buf} ->
             Kept = [4,5,6];
         stack ->
             Kept = [3,2,1];
