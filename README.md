@@ -316,7 +316,7 @@ This is more a wishlist than a roadmap, in no particular order:
 - Provide default filter functions in a new module
 
 ## Changelog
-- 1.0.5: added `pobox_buf` behaviour to add custom buffer implementations
+- 1.1.0: added `pobox_buf` behaviour to add custom buffer implementations
 - 1.0.4: move to gen\_statem implementation to avoid OTP 21 compile errors and OTP 20 warnings
 - 1.0.3: fix typespecs to generate fewer errors
 - 1.0.2: explicitly specify `registered` to be `[]` for
