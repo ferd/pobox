@@ -12,13 +12,13 @@
 -compile({no_auto_import,[size/1]}).
 
 -ifdef(namespaced_types).
--record(buf, {type = undefined :: undefined | 'stack' | 'queue' | 'keep_old',
+-record(buf, {type = undefined :: undefined | 'stack' | 'queue' | 'keep_old' | {mod, module()},
               max = undefined :: undefined | max(),
               size = 0 :: non_neg_integer(),
               drop = 0 :: drop(),
               data = undefined :: undefined | queue:queue() | list()}).
 -else.
--record(buf, {type = undefined :: undefined | 'stack' | 'queue' | 'keep_old',
+-record(buf, {type = undefined :: undefined | 'stack' | 'queue' | 'keep_old' | {mod, module()},
               max = undefined :: undefined | max(),
               size = 0 :: non_neg_integer(),
               drop = 0 :: drop(),
@@ -75,8 +75,13 @@ start_link(Owner, Size, Type, StateName) when is_pid(Owner);
 start_link(Name, Owner, Size, Type) ->
     start_link(Name, Owner, Size, Type, notify).
 
--spec start_link(name(), pid(), max(), stack | queue,
+-spec start_link(name(), pid(), max(), stack | queue | keep_old | {mod, module()},
                  'notify'|'passive') -> {ok, pid()}.
+start_link(Name, Owner, Size, Type = {mod, Module}, StateName) when Size > 0,
+                                                                is_atom(Module),
+                                                                StateName =:= notify orelse
+                                                                StateName =:= passive ->
+    gen_statem:start_link(Name, ?MODULE, {Owner, Size, Type, StateName}, []);
 start_link(Name, Owner, Size, Type, StateName) when Size > 0,
                                                     Type =:= queue orelse
                                                     Type =:= stack orelse
@@ -84,6 +89,7 @@ start_link(Name, Owner, Size, Type, StateName) when Size > 0,
                                                     StateName =:= notify orelse
                                                     StateName =:= passive ->
     gen_statem:start_link(Name, ?MODULE, {Owner, Size, Type, StateName}, []).
+
 
 %% @doc Allows to take a given buffer, and make it larger or smaller.
 %% A buffer can be made larger without overhead, but it may take
@@ -228,10 +234,11 @@ send_notification(S = #state{owner=Owner}) ->
     {next_state, passive, S}.
 
 %%% Generic buffer ops
--spec buf_new('queue' | 'stack' | 'keep_old', max()) -> buffer().
+-spec buf_new('queue' | 'stack' | 'keep_old' | {mod, module()}, max()) -> buffer().
 buf_new(queue, Size) -> #buf{type=queue, max=Size, data=queue:new()};
 buf_new(stack, Size) -> #buf{type=stack, max=Size, data=[]};
-buf_new(keep_old, Size) -> #buf{type=keep_old, max=Size, data=queue:new()}.
+buf_new(keep_old, Size) -> #buf{type=keep_old, max=Size, data=queue:new()};
+buf_new(T={mod, Mod}, Size) -> #buf{type=T, max=Size, data=Mod:new()}.
 
 insert(Msg, B=#buf{type=T, max=Size, size=Size, drop=Drop, data=Data}) ->
     B#buf{drop=Drop+1, data=push_drop(T, Msg, Size, Data)};
@@ -274,6 +281,11 @@ filter(T, Data, Fun, State, Msgs, Count, Drop) ->
     end.
 
 %% Specific buffer ops
+push_drop(T = {mod, Mod}, Msg, Size, Data) ->
+  case erlang:function_exported(Mod, push_drop, 2) of
+    true  -> Mod:push_drop(Msg, Data);
+    false -> push(T, Msg, drop(T, Size, Data))
+  end;
 push_drop(keep_old, _Msg, _Size, Data) -> Data;
 push_drop(T, Msg, Size, Data) -> push(T, Msg, drop(T, Size, Data)).
 
@@ -294,13 +306,20 @@ drop(stack, N, Size, L) ->
 drop(keep_old, N, Size, Queue) ->
     if Size > N  -> element(1, queue:split(N, Queue));
        Size =< N -> queue:new()
-    end.
+    end;
+drop({mod, Mod}, N, Size, Data) ->
+  if Size > N -> Mod:drop(N, Data);
+     Size =< N -> Mod:new()
+  end.
 
 push(queue, Msg, Q) -> queue:in(Msg, Q);
 push(stack, Msg, L) -> [Msg|L];
-push(keep_old, Msg, Q) -> queue:in(Msg, Q).
+push(keep_old, Msg, Q) -> queue:in(Msg, Q);
+push({mod, Mod}, Msg, Data) ->
+  Mod:push(Msg, Data).
 
 pop(queue, Q) -> queue:out(Q);
 pop(stack, []) -> {empty, []};
 pop(stack, [H|T]) -> {{value,H}, T};
-pop(keep_old, Q) -> queue:out(Q).
+pop(keep_old, Q) -> queue:out(Q);
+pop({mod, Mod}, Data) -> Mod:pop(Data).
