@@ -45,7 +45,7 @@
                 filter_state :: undefined | term()}).
 
 -export([start_link/3, start_link/4, start_link/5, 
-        resize/2, active/3, notify/1, post/2]).
+        resize/2, active/3, notify/1, post/2, post_sync/3]).
 -export([init/1,
          active_s/3, passive/3, notify/3,
          callback_mode/0, terminate/3, code_change/4]).
@@ -60,13 +60,13 @@
 %% message ordering.
 %% The initial state can be either passive or notify, depending on whether
 %% the user wants to get notifications of new messages as soon as possible.
--spec start_link(name(), max(), 'stack' | 'queue') -> {ok, pid()}.
+-spec start_link(name(), max(), 'stack' | 'queue' | keep_old | {mod, module()}) -> {ok, pid()}.
 start_link(Owner, Size, Type) ->
     start_link(Owner, Size, Type, notify).
 
 %% This one is messy because we have two clauses with 4 values, so we look them
 %% up based on guards.
--spec start_link(name(), max(), 'stack' | 'queue', 'notify'|'passive') -> {ok, pid()}
+-spec start_link(name(), max(), 'stack' | 'queue' | keep_old | {mod, module()}, 'notify'|'passive') -> {ok, pid()}
         ;       (term(), pid(), max(), stack | queue) -> {ok, pid()}.
 start_link(Owner, Size, Type, StateName) when is_pid(Owner);
                                               is_atom(Owner),
@@ -122,6 +122,14 @@ notify(Box) ->
 post(Box, Msg) ->
     gen_statem:cast(Box, {post, Msg}).
 
+%% @doc Sends a message to the PO Box, to be buffered. But give additional
+%%      feedback about if PO Box is full. This is very useful when combined
+%%      with the keep_old buffer type because it tells you the message will
+%%      be dropped.
+-spec post_sync(name(), term(), timeout()) -> ok | full.
+post_sync(Box, Msg, Timeout) ->
+    gen_statem:call(Box, {post, Msg}, Timeout).
+
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%% gen_statem Function Definitions %%%
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -148,7 +156,7 @@ active_s(cast, _Msg, _State) ->
     %% unexpected
     keep_state_and_data;
 active_s({call, From}, Msg, Data) ->    
-    handle_call(From, Msg, Data);
+    handle_call(From, Msg, active_s, Data);
 active_s(info, Msg, Data) ->    
     handle_info(Msg, active_s, Data).
 
@@ -170,7 +178,7 @@ passive(cast, _Msg, _State) ->
     %% unexpected
     keep_state_and_data;
 passive({call, From}, Msg, Data) ->    
-    handle_call(From, Msg, Data);
+    handle_call(From, Msg, passive, Data);
 passive(info, Msg, Data) ->    
     handle_info(Msg, passive, Data).
 
@@ -189,17 +197,23 @@ notify(cast, _Msg, _State) ->
     %% unexpected
     keep_state_and_data;
 notify({call, From}, Msg, Data) ->    
-    handle_call(From, Msg, Data);
+    handle_call(From, Msg, notify, Data);
 notify(info, Msg, Data) ->    
     handle_info(Msg, notify, Data).
         
 
 %% @private
-handle_call(From, {resize, NewSize}, S=#state{buf=Buf}) ->
+handle_call(From, {resize, NewSize}, _StateName, S=#state{buf=Buf}) ->
     {keep_state, S#state{buf=resize_buf(NewSize,Buf)}, 
         [{reply, From, ok}]};
+handle_call(From, {post, Msg}, StateName, S=#state{buf=#buf{max=Size, size=Size}}) ->
+    gen_server:reply(From, full),
+    ?MODULE:StateName(cast, {post, Msg}, S);
+handle_call(From, {post, Msg}, StateName, S) ->
+    gen_server:reply(From, ok),
+    ?MODULE:StateName(cast, {post, Msg}, S);
 
-handle_call(_From, _Msg, _Data) ->
+handle_call(_From, _Msg, _StateName, _Data) ->
     %% die of starvation, caller!
     keep_state_and_data.
 
