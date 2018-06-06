@@ -14,7 +14,7 @@ groups() ->
      {all, [], [notify_to_active, notify_to_overflow, no_api_post,
                 filter_skip, filter_drop, active_to_notify,
                 passive_to_notify, passive_to_active, resize,
-                linked_owner, drop_count]}
+                linked_owner, drop_count, post_sync, post_sync_active]}
     ].
 
 %%%%%%%%%%%%%%
@@ -362,6 +362,29 @@ drop_count(Config) ->
     [pobox:post(Box, N) || N <- lists:seq(1,Size)],
     pobox:active(Box, fun(_, S) -> {drop, S} end, nostate),
     ?wait_msg({mail, Box, [], 0, Size}),
+    true = is_process_alive(Box),
+    unlink(Box),
+    exit(Box, shutdown).
+
+post_sync(Config) ->
+    Type = ?config(type, Config),
+    Size = ?config(size, Config),
+    {ok, Box} = pobox:start_link(self(), Size, Type),
+    [full, ok | _] = lists:reverse(
+      [pobox:post_sync(Box, N, 5000) || N <- lists:seq(1,Size + 1)]
+    ),
+    true = is_process_alive(Box),
+    unlink(Box),
+    exit(Box, shutdown).
+
+post_sync_active(Config) ->
+    Type = ?config(type, Config),
+    Size = ?config(size, Config),
+    {ok, Box} = pobox:start_link(self(), Size, Type),
+    pobox:active(Box, fun(_, _) -> skip end, nostate),
+    [full, ok | _] = lists:reverse(
+      [pobox:post_sync(Box, N, 5000) || N <- lists:seq(1,Size + 1)]
+    ),
     true = is_process_alive(Box),
     unlink(Box),
     exit(Box, shutdown).

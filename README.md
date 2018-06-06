@@ -283,6 +283,9 @@ And keep going on and on and on.
   plenty of users asked for before. Tricking the filter function to
   forward the message (`self() ! Msg`) while dropping it will allow
   to do selective receives on bounded mailboxes.
+- When using `post_sync/3` keep in mind that full doesn't mean your message
+  will be dropped unless you are using the `keep_old` buffer type or
+  a custom buffer that behaves the same way as `keep_old`.
 
 ## Contributing
 
