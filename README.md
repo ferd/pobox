@@ -1,3 +1,5 @@
+[![Build Status](https://travis-ci.com/ferd/pobox.svg?branch=master)](https://travis-ci.com/ferd/pobox)
+
 # PO Box
 
 High throughput Erlang applications often get bitten by the fact that
@@ -137,7 +139,23 @@ Start a buffer with any of the following:
     start_link(OwnerPid, MaxSize, BufferType, InitialState)
     start_link(Name, OwnerPid, MaxSize, BufferType)
     start_link(Name, OwnerPid, MaxSize, BufferType, InitialState)
-
+    start_link(#{
+        name => Name,
+        owner => OwnerPid,
+        size => MaxSize, %% mandatory
+        type => BufferType,
+        initial_state => InitialState,
+        heir => HeirPid,
+        heir_data => HeirData
+    })
+    start_link(Name, #{
+        owner => OwnerPid,
+        size => MaxSize, %% mandatory
+        type => BufferType,
+        initial_state => InitialState,
+        heir => Heir,
+        heir_data => HeirData
+    })
 Where:
 
 - `Name` is any name a regular `gen_fsm` process can accept (including
@@ -150,7 +168,8 @@ Where:
   survive them individually, you should unlink the processes manually.
   This also means that processes that terminate normally won't kill the
   POBox.
-- `MaxSize` is the maximum number of messages in a buffer.
+- `MaxSize` is the maximum number of messages in a buffer. Note that this
+  is a mandatory property.
 - `BufferType` can be either `queue`, `stack` or `keep_old` and specifies
   which type is going to be used. You can also provide your buffer module
   using `{mod, Module}`.
@@ -158,7 +177,16 @@ Where:
   is set to `notify`. Having the buffer passive is desirable when you
   start it during an asynchronous `init` and do not want to receive
   notifications right away.
-
+- `Heir` The name or pid of a process that will take over the PO Box if
+  the owner dies. You can use a local registered name such as an atom or
+  you can also use `{global, Name}` and `{via, Module, Name}` if you wish.
+  If the Heir is a name the name is resolved as soon as the Owner dies.
+  A message will be sent to the heir to notify it of the transfer and the
+  PO Box will be put into passive state. The format of this message should
+  look like `{pobox_transfer, BoxPid, PreviousOwnerPid, HeirData, Reason}`.
+- `HeirData` is data that should be sent as part of the pobox_transfer
+   message to the heir when the owner dies.
+   
 The buffer can be made active by calling:
 
     pobox:active(BoxPid, FilterFun, FilterState)
@@ -202,6 +230,27 @@ Which is objectively much simpler.
 
 Messages can be sent to a PO Box by calling `pobox:post(BoxPid, Msg)` or
 sending a message directly to the process as `BoxPid ! {post, Msg}`.
+
+The ownership of the PO Box can be transfered to another process by calling:
+
+    pobox:give_away(BoxPid, DestPid, DestData, Timeout)
+    
+or
+
+    pobox:give_away(BoxPid, DestPid, Timeout)
+    
+which is equivalent to:
+
+    pobox_give_away(BoxPid, DestPid, undefined, Timeout)
+
+The call should return `true` on success and `false` on failure. Note that
+you can only call this from within the owner process otherwise the call always fails.
+If `DestData` is not provided it will be sent as `undefined` in the `pobox_transfer`
+message.
+
+The destination process should receive a message of the following form:
+
+    {pobox_transfer, BoxPid, PreviousOwnerPid, DestData | undefined, give_away}
 
 ## Example Session
 
@@ -312,13 +361,10 @@ These rules are strict, but we're nice people!
 
 This is more a wishlist than a roadmap, in no particular order:
 
-- Implement `give_away` and/or `heir` functionality to PO Boxes to make them
-  behave like ETS tables, or possibly just implementing `controlling_process`
-  to make them behave more like ports. Right now the semantics are those of
-  a mailbox, provided nobody unlinks the POBox from its owner process.
 - Provide default filter functions in a new module
 
 ## Changelog
+- 1.X.X: added heir and `give_away` functionality
 - 1.1.0: added `pobox_buf` behaviour to add custom buffer implementations
 - 1.0.4: move to gen\_statem implementation to avoid OTP 21 compile errors and OTP 20 warnings
 - 1.0.3: fix typespecs to generate fewer errors
@@ -339,4 +385,4 @@ This is more a wishlist than a roadmap, in no particular order:
 - Fred Hebert / @ferd: library generalization and current implementation
 - Geoff Cant / @archaelus: design, original implementation
 - Jean-Samuel Bédard / @jsbed: adaptation to gen\_statem behaviour
-- Eric des Courtis / @edescourtis: added `pobox_buf` behaviour
+- Eric des Courtis / @edescourtis: added `pobox_buf`behaviour & heir/give_away 

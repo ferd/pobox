@@ -1,0 +1,11 @@
+language: erlang
+otp_release:
+  - 21.1
+  - 20.3
+  - 19.3
+#  - 18.3   # NOTE: We know gen_statem requires Erlang 19+
+#  - 17.3
+#  - R16B03
+#  - R15B03
+script:
+  - rebar3 ct --readable=false
