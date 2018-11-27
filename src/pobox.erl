@@ -2,6 +2,7 @@
 %% @copyright Fred Hebert, Geoff Cant
 %% @author Fred Hebert <mononcqc@ferd.ca>
 %% @author Geoff Cant <nem@erlang.geek.nz>
+%% @author Eric des Courtis <eric.descourtis@mitel.com>
 %% @doc Generic process that acts as an external mailbox and a
 %% message buffer that will drop requests as required. For more
 %% information, see README.txt
@@ -12,18 +13,45 @@
 -compile({no_auto_import,[size/1]}).
 
 -ifdef(namespaced_types).
--record(buf, {type = undefined :: undefined | 'stack' | 'queue' | 'keep_old' | {mod, module()},
+-record(buf, {type = undefined :: undefined | stack | queue | keep_old | {mod, module()},
               max = undefined :: undefined | max(),
               size = 0 :: non_neg_integer(),
               drop = 0 :: drop(),
               data = undefined :: undefined | queue:queue() | list()}).
 -else.
--record(buf, {type = undefined :: undefined | 'stack' | 'queue' | 'keep_old' | {mod, module()},
+-record(buf, {type = undefined :: undefined | stack | queue | keep_old | {mod, module()},
               max = undefined :: undefined | max(),
               size = 0 :: non_neg_integer(),
               drop = 0 :: drop(),
               data = undefined :: undefined | queue() | list()}).
 -endif.
+
+-define(
+    PROCESS_NAME_GUARD_VIA_OR_GLOBAL(V),
+    ((tuple_size(V) == 2 andalso element(1, V) == global) orelse
+     (tuple_size(V) == 3 andalso element(1, V) == via))
+).
+
+-define(
+    PROCESS_NAME_GUARD_NO_PID(V),
+    is_atom(V) orelse ?PROCESS_NAME_GUARD_VIA_OR_GLOBAL(V)
+).
+
+-define(
+    PROCESS_NAME_GUARD(V),
+    is_pid(V) orelse ?PROCESS_NAME_GUARD_NO_PID(V)
+).
+
+-define(
+    PROCESS_NAME_GUARD_WITH_LOCAL_NO_PID(V),
+    is_atom(V) orelse (
+    (tuple_size(V) == 2 andalso element(1, V) == local) orelse ?PROCESS_NAME_GUARD_VIA_OR_GLOBAL(V))
+).
+
+-define(POBOX_START_STATE_GUARD(V), V =:= notify orelse V =:= passive).
+-define(POBOX_BUFFER_TYPE_GUARD(V), V =:= queue orelse V =:= stack orelse V =:= keep_old orelse
+    (tuple_size(V) == 2 andalso element(1, V) =:= mod andalso is_atom(element(2, V)))
+).
 
 -type max() :: pos_integer().
 -type drop() :: non_neg_integer().
@@ -40,15 +68,30 @@
 -export_type([max/0, filter/0, in/0, mail/0, note/0]).
 
 -record(state, {buf :: buffer(),
-                owner :: pid(),
+                owner :: name(),
                 filter :: undefined | filter(),
-                filter_state :: undefined | term()}).
+                filter_state :: undefined | term(),
+                owner_pid :: pid(),
+                owner_monitor_ref :: undefined | reference(),
+                heir :: undefined | pid() | atom(),
+                heir_data :: undefined | term(),
+                name :: name()}).
 
--export([start_link/3, start_link/4, start_link/5, 
-        resize/2, active/3, notify/1, post/2, post_sync/3]).
+-record(pobox_opts, {name :: undefined | name(),
+                     owner = self() :: name(),
+                     size :: undefined | non_neg_integer(),
+                     type = queue :: stack | queue | keep_old | {mod, module()},
+                     initial_state = notify :: notify | passive,
+                     heir :: undefined | name(),
+                     heir_data :: undefined | term()}).
+
+-export([start_link/1, start_link/2, start_link/3, start_link/4, start_link/5,
+        resize/2, resize/3, usage/1, usage/2, active/3, notify/1, post/2, post_sync/3,
+        give_away/3, give_away/4]).
 -export([init/1,
          active_s/3, passive/3, notify/3,
          callback_mode/0, terminate/3, code_change/4]).
+
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%% API Function Definitions %%%
@@ -60,35 +103,61 @@
 %% message ordering.
 %% The initial state can be either passive or notify, depending on whether
 %% the user wants to get notifications of new messages as soon as possible.
--spec start_link(name(), max(), 'stack' | 'queue' | keep_old | {mod, module()}) -> {ok, pid()}.
-start_link(Owner, Size, Type) ->
+-spec start_link(name(), max(), stack | queue | keep_old | {mod, module()}) -> {ok, pid()}.
+start_link(Owner, Size, Type) when ?PROCESS_NAME_GUARD(Owner), is_integer(Size), Size > 0 ->
     start_link(Owner, Size, Type, notify).
 
 %% This one is messy because we have two clauses with 4 values, so we look them
 %% up based on guards.
--spec start_link(name(), max(), 'stack' | 'queue' | keep_old | {mod, module()}, 'notify'|'passive') -> {ok, pid()}
-        ;       (term(), pid(), max(), stack | queue) -> {ok, pid()}.
-start_link(Owner, Size, Type, StateName) when is_pid(Owner);
-                                              is_atom(Owner),
+-spec start_link(name(), max(), stack | queue | keep_old | {mod, module()}, notify | passive) -> {ok, pid()}.
+start_link(Owner, Size, Type, StateName) when ?PROCESS_NAME_GUARD(Owner),
+                                              ?POBOX_START_STATE_GUARD(StateName),
                                               is_integer(Size), Size > 0 ->
-    gen_statem:start_link(?MODULE, {Owner, Size, Type, StateName}, []);
-start_link(Name, Owner, Size, Type) ->
+    gen_statem:start_link(?MODULE, #pobox_opts{owner=Owner, size=Size, type=Type, initial_state=StateName}, []);
+start_link(Name, Owner, Size, Type)
+  when Size > 0,
+    ?PROCESS_NAME_GUARD_WITH_LOCAL_NO_PID(Name),
+    ?PROCESS_NAME_GUARD(Owner),
+    ?POBOX_BUFFER_TYPE_GUARD(Type) ->
     start_link(Name, Owner, Size, Type, notify).
 
--spec start_link(name(), pid(), max(), stack | queue | keep_old | {mod, module()},
+-spec start_link(name(), name(), max(), stack | queue | keep_old | {mod, module()},
                  'notify'|'passive') -> {ok, pid()}.
-start_link(Name, Owner, Size, Type = {mod, Module}, StateName) when Size > 0,
-                                                                is_atom(Module),
-                                                                StateName =:= notify orelse
-                                                                StateName =:= passive ->
-    gen_statem:start_link(Name, ?MODULE, {Owner, Size, Type, StateName}, []);
-start_link(Name, Owner, Size, Type, StateName) when Size > 0,
-                                                    Type =:= queue orelse
-                                                    Type =:= stack orelse
-                                                    Type =:= keep_old,
-                                                    StateName =:= notify orelse
-                                                    StateName =:= passive ->
-    gen_statem:start_link(Name, ?MODULE, {Owner, Size, Type, StateName}, []).
+start_link(Name, Owner, Size, Type, StateName)
+  when Size > 0,
+    ?PROCESS_NAME_GUARD_WITH_LOCAL_NO_PID(Name),
+    ?PROCESS_NAME_GUARD(Owner),
+    ?POBOX_BUFFER_TYPE_GUARD(Type),
+    ?POBOX_START_STATE_GUARD(StateName) ->
+    gen_statem:start_link(Name, ?MODULE, #pobox_opts{
+        name = Name,
+        owner = Owner,
+        size = Size,
+        type = Type,
+        initial_state = StateName
+    }, []).
+
+default_opts() ->
+  #pobox_opts{owner=self(), initial_state=notify, type=queue}.
+
+-spec(start_link(map() | list()) -> {ok, pid()}).
+start_link(Opts) when is_list(Opts) ->
+  case validate_opts(proplist_to_pobox_opt_with_defaults(Opts)) of
+    PoBoxOpts = #pobox_opts{name=undefined} ->
+      gen_statem:start_link(?MODULE, PoBoxOpts, []);
+    PoBoxOpts = #pobox_opts{name=Name} ->
+      gen_statem:start_link(Name, ?MODULE, PoBoxOpts, [])
+  end;
+start_link(Opts) when is_map(Opts) ->
+  start_link(maps:to_list(Opts)).
+
+-spec(start_link(name(), map() | list()) -> {ok, pid()}).
+start_link(Name, Opts) when ?PROCESS_NAME_GUARD_WITH_LOCAL_NO_PID(Name), is_list(Opts) ->
+  PoBoxOpts = validate_opts(proplist_to_pobox_opt_with_defaults([{name, Name} | Opts])),
+  gen_statem:start_link(Name, ?MODULE, PoBoxOpts, []);
+start_link(Name, Opts) when ?PROCESS_NAME_GUARD_WITH_LOCAL_NO_PID(Name), is_map(Opts) ->
+  start_link(Name, maps:to_list(Opts)).
+
 
 
 %% @doc Allows to take a given buffer, and make it larger or smaller.
@@ -98,6 +167,24 @@ start_link(Name, Owner, Size, Type, StateName) when Size > 0,
 -spec resize(name(), max()) -> ok.
 resize(Box, NewSize) when NewSize > 0 ->
     gen_statem:call(Box, {resize, NewSize}).
+
+%% @doc Allows to take a given buffer, and make it larger or smaller.
+%% A buffer can be made larger without overhead, but it may take
+%% more work to make it smaller given there could be a
+%% need to drop messages that would now be considered overflow.
+-spec resize(name(), max(), timeout()) -> ok.
+resize(Box, NewSize, Timeout) when NewSize > 0 ->
+  gen_statem:call(Box, {resize, NewSize}, Timeout).
+
+%% @doc Get the number of items in the PO Box and the capacity.
+-spec usage(name()) -> {non_neg_integer(), pos_integer()}.
+usage(Box) ->
+    gen_statem:call(Box, usage).
+
+%% @doc Get the number of items in the PO Box and the capacity.
+-spec usage(name(), timeout()) -> {non_neg_integer(), pos_integer()}.
+usage(Box, Timeout) ->
+    gen_statem:call(Box, usage, Timeout).
 
 %% @doc Forces the buffer into an active state where it will
 %% send the data it has accumulated. The fun passed needs to have
@@ -127,8 +214,22 @@ post(Box, Msg) ->
 %%      with the keep_old buffer type because it tells you the message will
 %%      be dropped.
 -spec post_sync(name(), term(), timeout()) -> ok | full.
-post_sync(Box, Msg, Timeout) ->
+post_sync(Box, Msg, Timeout) when ?PROCESS_NAME_GUARD(Box) ->
     gen_statem:call(Box, {post, Msg}, Timeout).
+
+%% @doc Give away the PO Box ownership to another process. This will send a message in the following form to Dest:
+%%      {pobox_transfer, BoxPid :: pid(), PreviousOwnerPid :: pid(), undefined, give_away}
+-spec give_away(name(), name(), timeout()) -> boolean().
+give_away(Box, Dest, Timeout) when
+    ?PROCESS_NAME_GUARD(Box), ?PROCESS_NAME_GUARD(Dest) ->
+    give_away(Box, Dest, undefined, Timeout).
+
+%% @doc Give away the PO Box ownership to another process. This will send a message in the following form to Dest:
+%%      {pobox_transfer, BoxPid :: pid(), PreviousOwnerPid :: pid(), DestData :: term(), give_away}
+-spec give_away(name(), name(), term(), timeout()) -> boolean().
+give_away(Box, Dest, DestData, Timeout) when
+    ?PROCESS_NAME_GUARD(Box), ?PROCESS_NAME_GUARD(Dest) ->
+    gen_statem:call(Box, {give_away, Dest, DestData, self()}, Timeout).
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%% gen_statem Function Definitions %%%
@@ -137,12 +238,34 @@ post_sync(Box, Msg, Timeout) ->
 callback_mode() ->
     state_functions.
 
-%% @private
-init({Owner, Size, Type, StateName}) ->
-    if is_pid(Owner)  -> link(Owner);
-       is_atom(Owner) -> link(whereis(Owner))
+%% @private {Owner, Size, Type, StateName, {heir, Heir, HeirData}}
+init(#pobox_opts{
+    name = Name0,
+    owner = Owner,
+    size = Size,
+    type = Type,
+    initial_state = StateName,
+    heir = Heir,
+    heir_data = HeirData
+}) ->
+    Name1 = start_link_name_to_name(Name0),
+    erlang:link(OwnerPid = where(Owner)),
+    MaybeMonitorRef = case Heir of
+        undefined -> undefined;
+        HeirName when ?PROCESS_NAME_GUARD(HeirName) ->
+            MonitorRef = erlang:monitor(process, OwnerPid),
+            erlang:unlink(OwnerPid),
+            MonitorRef
     end,
-    {ok, StateName, #state{buf = buf_new(Type, Size), owner=Owner}}.
+    {ok, StateName, #state{
+        buf=buf_new(Type, Size),
+        owner=Owner,
+        owner_pid=OwnerPid,
+        owner_monitor_ref=MaybeMonitorRef,
+        heir=Heir,
+        heir_data=HeirData,
+        name=Name1
+    }}.
 
 %% @private
 active_s(cast, {active_s, Fun, FunState}, S = #state{}) ->
@@ -198,26 +321,76 @@ notify(cast, _Msg, _State) ->
     keep_state_and_data;
 notify({call, From}, Msg, Data) ->    
     handle_call(From, Msg, notify, Data);
-notify(info, Msg, Data) ->    
+notify(info, Msg, Data) ->
     handle_info(Msg, notify, Data).
         
 
 %% @private
-handle_call(From, {resize, NewSize}, _StateName, S=#state{buf=Buf}) ->
-    {keep_state, S#state{buf=resize_buf(NewSize,Buf)}, 
-        [{reply, From, ok}]};
 handle_call(From, {post, Msg}, StateName, S=#state{buf=#buf{max=Size, size=Size}}) ->
-    gen_server:reply(From, full),
+    gen_statem:reply(From, full),
     ?MODULE:StateName(cast, {post, Msg}, S);
 handle_call(From, {post, Msg}, StateName, S) ->
-    gen_server:reply(From, ok),
+    gen_statem:reply(From, ok),
     ?MODULE:StateName(cast, {post, Msg}, S);
-
+handle_call(From, usage, _State, #state{buf=#buf{size=Size, max=MaxSize}}) ->
+    gen_statem:reply(From, {Size, MaxSize}),
+    keep_state_and_data;
+handle_call(From, {resize, NewSize}, _StateName, S=#state{buf=Buf}) ->
+    {keep_state, S#state{buf=resize_buf(NewSize,Buf)}, [{reply, From, ok}]};
+handle_call(From, {give_away, Dest, DestData, Origin}, _StateName, S0=#state{
+    owner_pid=OwnerPid, owner_monitor_ref = MaybeOwnerMonitorRef, name=Name
+}) ->
+    CanUsePid = case where(Dest) of
+        DstPid when is_pid(DstPid) ->
+            is_process_alive(DstPid) and (Origin =:= OwnerPid) and (DstPid =/= OwnerPid);
+        _ -> false
+    end,
+    case CanUsePid of
+        true ->
+          case send_ownership_transfer(OwnerPid, Dest, DestData, Name, give_away) of
+            {ok, DestPid} ->
+              S1 = case MaybeOwnerMonitorRef of
+                undefined ->
+                  true = erlang:link(DestPid),
+                  true = erlang:unlink(OwnerPid),
+                  S0#state{owner=Dest, owner_pid=DestPid};
+                OwnerMonitorRef when is_reference(OwnerMonitorRef) ->
+                  MaybeDestMonitorRef = erlang:monitor(process, DestPid),
+                  true = erlang:demonitor(OwnerMonitorRef),
+                  S0#state{owner=Dest, owner_pid=DestPid, owner_monitor_ref=MaybeDestMonitorRef}
+              end,
+              {next_state, passive, S1, [{reply, From, true}]};
+            {error, noproc} ->
+              {keep_state, S0, [{reply, From, false}]}
+          end;
+        false ->
+            {keep_state, S0, [{reply, From, false}]}
+    end;
 handle_call(_From, _Msg, _StateName, _Data) ->
     %% die of starvation, caller!
     keep_state_and_data.
 
 %% @private
+handle_info(
+    {'DOWN', OwnerMonitorRef, process, OwnerPid, Reason},
+    _StateName,
+    S=#state{
+        owner_pid=OwnerPid, owner_monitor_ref=OwnerMonitorRef, heir=Heir, heir_data=HeirData, name=Name
+    }) ->
+    case send_ownership_transfer(OwnerPid, Heir, HeirData, Name, Reason) of
+        {ok, HeirPid} ->
+            erlang:link(HeirPid),
+            erlang:demonitor(OwnerMonitorRef),
+            {next_state, passive, S#state{
+                owner=Heir,
+                owner_pid=HeirPid,
+                owner_monitor_ref=undefined,
+                heir=undefined,
+                heir_data=undefined
+            }};
+        {error, noproc} ->
+            {stop, [{heir, noproc}, {owner, Reason}], S}
+    end;
 handle_info({post, Msg}, StateName, State) ->
     %% We allow anonymous posting and redirect it to the internal form.
     ?MODULE:StateName(cast, {post, Msg}, State);
@@ -237,18 +410,18 @@ code_change(_OldVsn, StateName, State, _Extra) ->
 %%% Private Function Definitions %%%
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-send(S=#state{buf = Buf, owner=Pid, filter=Fun, filter_state=FilterState}) ->
+send(S=#state{buf=Buf, owner_pid=OwnerPid, filter=Fun, filter_state=FilterState}) ->
     {Msgs, Count, Dropped, NewBuf} = buf_filter(Buf, Fun, FilterState),
-    Pid ! {mail, self(), Msgs, Count, Dropped},
+    OwnerPid ! {mail, self(), Msgs, Count, Dropped},
     NewState = S#state{buf=NewBuf, filter=undefined, filter_state=undefined},
     {next_state, passive, NewState}.
 
-send_notification(S = #state{owner=Owner}) ->
-    Owner ! {mail, self(), new_data},
+send_notification(S = #state{owner_pid=OwnerPid}) ->
+    OwnerPid ! {mail, self(), new_data},
     {next_state, passive, S}.
 
 %%% Generic buffer ops
--spec buf_new('queue' | 'stack' | 'keep_old' | {mod, module()}, max()) -> buffer().
+-spec buf_new(queue | stack | keep_old | {mod, module()}, max()) -> buffer().
 buf_new(queue, Size) -> #buf{type=queue, max=Size, data=queue:new()};
 buf_new(stack, Size) -> #buf{type=stack, max=Size, data=[]};
 buf_new(keep_old, Size) -> #buf{type=keep_old, max=Size, data=queue:new()};
@@ -322,9 +495,9 @@ drop(keep_old, N, Size, Queue) ->
        Size =< N -> queue:new()
     end;
 drop({mod, Mod}, N, Size, Data) ->
-  if Size > N -> Mod:drop(N, Data);
-     Size =< N -> Mod:new()
-  end.
+    if Size > N -> Mod:drop(N, Data);
+       Size =< N -> Mod:new()
+    end.
 
 push(queue, Msg, Q) -> queue:in(Msg, Q);
 push(stack, Msg, L) -> [Msg|L];
@@ -337,3 +510,58 @@ pop(stack, []) -> {empty, []};
 pop(stack, [H|T]) -> {{value,H}, T};
 pop(keep_old, Q) -> queue:out(Q);
 pop({mod, Mod}, Data) -> Mod:pop(Data).
+
+
+send_ownership_transfer(_PreviousOwnerPid, undefined, _HeirData, _BoxName, _Reason) -> {error, noproc};
+send_ownership_transfer(PreviousOwnerPid, NewOwnerName, HeirData, BoxName, Reason)
+    when ?PROCESS_NAME_GUARD_WITH_LOCAL_NO_PID(NewOwnerName), ?PROCESS_NAME_GUARD(BoxName) ->
+    case where(NewOwnerName) of
+        Pid when is_pid(Pid) ->
+            Pid ! {pobox_transfer, self(), PreviousOwnerPid, HeirData, Reason},
+            {ok, Pid};
+        _ ->
+            {error, noproc}
+    end;
+send_ownership_transfer(PreviousOwnerPid, NewOwnerPid, HeirData, BoxName, Reason)
+    when is_pid(NewOwnerPid), ?PROCESS_NAME_GUARD(BoxName) ->
+    NewOwnerPid ! {pobox_transfer, self(), PreviousOwnerPid, HeirData, Reason},
+    {ok, NewOwnerPid}.
+
+where(Pid) when is_pid(Pid) -> Pid;
+where(Name) when is_atom(Name) -> erlang:whereis(Name);
+where({global, Name}) -> global:whereis_name(Name);
+where({via, Module, Name}) -> Module:whereis_name(Name).
+
+proplist_to_pobox_opt_with_defaults(Opts) when is_list(Opts) ->
+    Fields = record_info(fields, pobox_opts),
+    [Tag | Values] = tuple_to_list(default_opts()),
+    Defaults = lists:zip(Fields, Values),
+    L = lists:map(fun ({K,V}) -> proplists:get_value(K, Opts, V) end, Defaults),
+    list_to_tuple([Tag | L]).
+
+
+validate_opts(Opts=#pobox_opts{
+    name=Name,
+    owner=Owner,
+    initial_state=StateName,
+    size=Size,
+    type=Type,
+    heir=Heir
+}) when
+    is_integer(Size), Size > 0,
+    ?POBOX_BUFFER_TYPE_GUARD(Type),
+    ?POBOX_START_STATE_GUARD(StateName),
+    ?PROCESS_NAME_GUARD(Owner),
+    Name =:= undefined orelse ?PROCESS_NAME_GUARD_WITH_LOCAL_NO_PID(Name),
+    Heir =:= undefined orelse ?PROCESS_NAME_GUARD(Heir) ->
+    Opts;
+validate_opts(Opts) ->
+    erlang:error(badarg, [Opts]).
+
+%% Normalize name to be used by gen:call gen:cast derived functions etc.
+start_link_name_to_name(Name0) ->
+    case Name0 of
+        {local, Name} -> Name;
+        undefined -> self();
+        Name -> Name
+    end.
