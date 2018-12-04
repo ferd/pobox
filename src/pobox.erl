@@ -79,15 +79,15 @@
 
 -record(pobox_opts, {name :: undefined | name(),
                      owner = self() :: name(),
-                     size :: undefined | non_neg_integer(),
+                     max :: undefined | max(),
                      type = queue :: stack | queue | keep_old | {mod, module()},
                      initial_state = notify :: notify | passive,
                      heir :: undefined | name(),
                      heir_data :: undefined | term()}).
 
 -export([start_link/1, start_link/2, start_link/3, start_link/4, start_link/5,
-        resize/2, resize/3, usage/1, usage/2, active/3, notify/1, post/2, post_sync/3,
-        give_away/3, give_away/4]).
+        resize/2, resize/3, usage/1, usage/2, active/3, notify/1, post/2,
+        post_sync/2, post_sync/3, give_away/3, give_away/4]).
 -export([init/1,
          active_s/3, passive/3, notify/3,
          callback_mode/0, terminate/3, code_change/4]).
@@ -104,27 +104,27 @@
 %% The initial state can be either passive or notify, depending on whether
 %% the user wants to get notifications of new messages as soon as possible.
 -spec start_link(name(), max(), stack | queue | keep_old | {mod, module()}) -> {ok, pid()}.
-start_link(Owner, Size, Type) when ?PROCESS_NAME_GUARD(Owner), is_integer(Size), Size > 0 ->
-    start_link(Owner, Size, Type, notify).
+start_link(Owner, MaxSize, Type) when ?PROCESS_NAME_GUARD(Owner), is_integer(MaxSize), MaxSize > 0 ->
+    start_link(Owner, MaxSize, Type, notify).
 
 %% This one is messy because we have two clauses with 4 values, so we look them
 %% up based on guards.
 -spec start_link(name(), max(), stack | queue | keep_old | {mod, module()}, notify | passive) -> {ok, pid()}.
-start_link(Owner, Size, Type, StateName) when ?PROCESS_NAME_GUARD(Owner),
+start_link(Owner, MaxSize, Type, StateName) when ?PROCESS_NAME_GUARD(Owner),
                                               ?POBOX_START_STATE_GUARD(StateName),
-                                              is_integer(Size), Size > 0 ->
-    gen_statem:start_link(?MODULE, #pobox_opts{owner=Owner, size=Size, type=Type, initial_state=StateName}, []);
-start_link(Name, Owner, Size, Type)
-  when Size > 0,
+                                              is_integer(MaxSize), MaxSize > 0 ->
+    gen_statem:start_link(?MODULE, #pobox_opts{owner=Owner, max = MaxSize, type=Type, initial_state=StateName}, []);
+start_link(Name, Owner, MaxSize, Type)
+  when MaxSize > 0,
     ?PROCESS_NAME_GUARD_WITH_LOCAL_NO_PID(Name),
     ?PROCESS_NAME_GUARD(Owner),
     ?POBOX_BUFFER_TYPE_GUARD(Type) ->
-    start_link(Name, Owner, Size, Type, notify).
+    start_link(Name, Owner, MaxSize, Type, notify).
 
 -spec start_link(name(), name(), max(), stack | queue | keep_old | {mod, module()},
                  'notify'|'passive') -> {ok, pid()}.
-start_link(Name, Owner, Size, Type, StateName)
-  when Size > 0,
+start_link(Name, Owner, MaxSize, Type, StateName)
+  when MaxSize > 0,
     ?PROCESS_NAME_GUARD_WITH_LOCAL_NO_PID(Name),
     ?PROCESS_NAME_GUARD(Owner),
     ?POBOX_BUFFER_TYPE_GUARD(Type),
@@ -132,7 +132,7 @@ start_link(Name, Owner, Size, Type, StateName)
     gen_statem:start_link(Name, ?MODULE, #pobox_opts{
         name = Name,
         owner = Owner,
-        size = Size,
+        max = MaxSize,
         type = Type,
         initial_state = StateName
     }, []).
@@ -165,16 +165,16 @@ start_link(Name, Opts) when ?PROCESS_NAME_GUARD_WITH_LOCAL_NO_PID(Name), is_map(
 %% more work to make it smaller given there could be a
 %% need to drop messages that would now be considered overflow.
 -spec resize(name(), max()) -> ok.
-resize(Box, NewSize) when NewSize > 0 ->
-    gen_statem:call(Box, {resize, NewSize}).
+resize(Box, NewMaxSize) when NewMaxSize > 0 ->
+    gen_statem:call(Box, {resize, NewMaxSize}).
 
 %% @doc Allows to take a given buffer, and make it larger or smaller.
 %% A buffer can be made larger without overhead, but it may take
 %% more work to make it smaller given there could be a
 %% need to drop messages that would now be considered overflow.
 -spec resize(name(), max(), timeout()) -> ok.
-resize(Box, NewSize, Timeout) when NewSize > 0 ->
-  gen_statem:call(Box, {resize, NewSize}, Timeout).
+resize(Box, NewMaxSize, Timeout) when NewMaxSize > 0 ->
+  gen_statem:call(Box, {resize, NewMaxSize}, Timeout).
 
 %% @doc Get the number of items in the PO Box and the capacity.
 -spec usage(name()) -> {non_neg_integer(), pos_integer()}.
@@ -213,6 +213,11 @@ post(Box, Msg) ->
 %%      feedback about if PO Box is full. This is very useful when combined
 %%      with the keep_old buffer type because it tells you the message will
 %%      be dropped.
+-spec post_sync(name(), term()) -> ok | full.
+post_sync(Box, Msg) when ?PROCESS_NAME_GUARD(Box) ->
+    gen_statem:call(Box, {post, Msg}).
+
+
 -spec post_sync(name(), term(), timeout()) -> ok | full.
 post_sync(Box, Msg, Timeout) when ?PROCESS_NAME_GUARD(Box) ->
     gen_statem:call(Box, {post, Msg}, Timeout).
@@ -242,7 +247,7 @@ callback_mode() ->
 init(#pobox_opts{
     name = Name0,
     owner = Owner,
-    size = Size,
+    max = MaxSize,
     type = Type,
     initial_state = StateName,
     heir = Heir,
@@ -258,7 +263,7 @@ init(#pobox_opts{
             MonitorRef
     end,
     {ok, StateName, #state{
-        buf=buf_new(Type, Size),
+        buf=buf_new(Type, MaxSize),
         owner=Owner,
         owner_pid=OwnerPid,
         owner_monitor_ref=MaybeMonitorRef,
@@ -491,7 +496,7 @@ drop(stack, N, Size, L) ->
        Size =< N -> []
     end;
 drop(keep_old, N, Size, Queue) ->
-    if Size > N  -> element(1, queue:split(N, Queue));
+    if Size > N  -> element(1, queue:split(Size - N, Queue));
        Size =< N -> queue:new()
     end;
 drop({mod, Mod}, N, Size, Data) ->
@@ -544,11 +549,11 @@ validate_opts(Opts=#pobox_opts{
     name=Name,
     owner=Owner,
     initial_state=StateName,
-    size=Size,
+    max =MaxSize,
     type=Type,
     heir=Heir
 }) when
-    is_integer(Size), Size > 0,
+    is_integer(MaxSize), MaxSize > 0,
     ?POBOX_BUFFER_TYPE_GUARD(Type),
     ?POBOX_START_STATE_GUARD(StateName),
     ?PROCESS_NAME_GUARD(Owner),

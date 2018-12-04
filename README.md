@@ -66,7 +66,7 @@ buffer and drop them when necessary.
 
 The notify state is enabled by the user by calling the PO Box. Its sole
 task is to verify if there is any message in the buffer. If there is, it
-will respond to the PO Box's owner with a `{mail, new_data}` message
+will respond to the PO Box's owner with a `{mail, BoxPid, new_data}` message
 sent directly to the pid. If there is no message in the buffer, the
 process will wait in the notify state until it gets one. As soon as the
 notification is sent, it reverts back to the passive state.
@@ -142,7 +142,7 @@ Start a buffer with any of the following:
     start_link(#{
         name => Name,
         owner => OwnerPid,
-        size => MaxSize, %% mandatory
+        max => MaxSize, %% mandatory
         type => BufferType,
         initial_state => InitialState,
         heir => HeirPid,
@@ -150,7 +150,7 @@ Start a buffer with any of the following:
     })
     start_link(Name, #{
         owner => OwnerPid,
-        size => MaxSize, %% mandatory
+        max => MaxSize, %% mandatory
         type => BufferType,
         initial_state => InitialState,
         heir => Heir,
@@ -277,7 +277,7 @@ I can start the process and wait for a while:
 Let's see if we have anything in our PO box:
 
     4> flush().
-    Shell got {mail,new_data}
+    Shell got {mail, <0.39.0>, new_data}
     ok
 
 Yes! Let's get that content:
@@ -312,7 +312,7 @@ Nice. We can go back to notification mode too:
     9> pobox:notify(Box).
     ok
     10> flush().
-    Shell got {mail,new_data}
+    Shell got {mail, <0.39.0>, new_data}
     ok
 
 And keep going on and on and on.
@@ -364,7 +364,7 @@ This is more a wishlist than a roadmap, in no particular order:
 - Provide default filter functions in a new module
 
 ## Changelog
-- 1.X.X: added heir and `give_away` functionality
+- 1.2.0: added heir and `give_away` functionality / fixed `keep_old` buffer size tracking
 - 1.1.0: added `pobox_buf` behaviour to add custom buffer implementations
 - 1.0.4: move to gen\_statem implementation to avoid OTP 21 compile errors and OTP 20 warnings
 - 1.0.3: fix typespecs to generate fewer errors
