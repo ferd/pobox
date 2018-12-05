@@ -14,3 +14,4 @@ logs/
 test/*.beam
 .DS_Store
 _build/
+.rebar3

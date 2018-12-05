@@ -385,4 +385,4 @@ This is more a wishlist than a roadmap, in no particular order:
 - Fred Hebert / @ferd: library generalization and current implementation
 - Geoff Cant / @archaelus: design, original implementation
 - Jean-Samuel Bédard / @jsbed: adaptation to gen\_statem behaviour
-- Eric des Courtis / @edescourtis: added `pobox_buf`behaviour & heir/give_away 
+- Eric des Courtis / @edescourtis: added `pobox_buf` behaviour & heir/give\_away functionality
